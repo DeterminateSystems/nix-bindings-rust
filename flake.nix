@@ -3,7 +3,7 @@
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nix.url = "github:DeterminateSystems/nix-src";
+    nix.url = "github:DeterminateSystems/nix-src/RossComputerGuy/capi-derived-path";
     nix.inputs.nixpkgs.follows = "nixpkgs";
     nix-cargo-integration.url = "github:yusdacra/nix-cargo-integration";
     nix-cargo-integration.inputs.nixpkgs.follows = "nixpkgs";

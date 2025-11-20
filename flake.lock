@@ -161,15 +161,16 @@
         "nixpkgs-regression": "nixpkgs-regression"
       },
       "locked": {
-        "lastModified": 1762723967,
-        "narHash": "sha256-QrkPq3v5Px8rdl4+FoONC8FwiIw48Jrgk4cbucbyhyw=",
+        "lastModified": 1763665175,
+        "narHash": "sha256-BRplTcyC4Y9TGNAKTRxGfwFINBkEHpFyZbfe3zIDh64=",
         "owner": "DeterminateSystems",
         "repo": "nix-src",
-        "rev": "42a402fc873de408a4c00017b134759093be2d8c",
+        "rev": "922ee5678891447daddaa5885bc671ef806fc715",
         "type": "github"
       },
       "original": {
         "owner": "DeterminateSystems",
+        "ref": "RossComputerGuy/capi-derived-path",
         "repo": "nix-src",
         "type": "github"
       }
