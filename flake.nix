@@ -3,7 +3,7 @@
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nix.url = "github:DeterminateSystems/nix-src";
+    nix.url = "github:DeterminateSystems/nix-src/tristanross/dsp-62-collab-figure-out-static-building-of-determinate-nix";
     nix-cargo-integration.url = "github:90-008/nix-cargo-integration";
     nix-cargo-integration.inputs.nixpkgs.follows = "nixpkgs";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

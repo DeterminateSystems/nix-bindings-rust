@@ -159,15 +159,16 @@
         "nixpkgs-regression": "nixpkgs-regression"
       },
       "locked": {
-        "lastModified": 1769182158,
-        "narHash": "sha256-QE+cj0eHW8kzuEbzfxQXfweSbps8sJyzHUjfrQKfWYo=",
+        "lastModified": 1769232122,
+        "narHash": "sha256-Fe7QY1TuAhGVOfqsUPP3XMYVbsf+iMcwB2hoftjEMBo=",
         "owner": "DeterminateSystems",
         "repo": "nix-src",
-        "rev": "731906053f4feba452c9bc782768263f9baf9ee4",
+        "rev": "70cb63554f1f39e4e3f2bbd3b649202c92cd1126",
         "type": "github"
       },
       "original": {
         "owner": "DeterminateSystems",
+        "ref": "tristanross/dsp-62-collab-figure-out-static-building-of-determinate-nix",
         "repo": "nix-src",
         "type": "github"
       }
