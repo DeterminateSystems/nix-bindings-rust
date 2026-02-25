@@ -389,6 +389,53 @@ impl Store {
         Ok(r)
     }
 
+    /// Builds any Nix store paths.
+    ///
+    /// **Requires Determinate Nix 3.11 or later.**
+    #[cfg(nix_at_least = "2.31")]
+    #[doc(alias = "nix_store_build_paths")]
+    pub fn build_paths(&mut self, paths: &[&StorePath]) -> Result<BTreeMap<String, String>> {
+        let mut outputs = BTreeMap::new();
+        let userdata = &mut outputs as *mut BTreeMap<String, String> as *mut std::os::raw::c_void;
+
+        unsafe extern "C" fn callback(
+            userdata: *mut std::os::raw::c_void,
+            path: *const c_char,
+            result: *const c_char,
+        ) {
+            let outputs = userdata as *mut BTreeMap<String, String>;
+            let outputs = &mut *outputs;
+
+            let path = std::ffi::CStr::from_ptr(path)
+                .to_string_lossy()
+                .into_owned();
+
+            let result = std::ffi::CStr::from_ptr(result)
+                .to_string_lossy()
+                .into_owned();
+
+            outputs.insert(path, result);
+        }
+
+        let mut paths: Vec<*const raw::StorePath> = paths
+            .iter()
+            .map(|p| unsafe { p.as_ptr() as *const raw::StorePath })
+            .collect();
+
+        unsafe {
+            check_call!(raw::store_build_paths(
+                &mut self.context,
+                self.inner.ptr(),
+                paths.as_mut_ptr(),
+                paths.len() as std::os::raw::c_uint,
+                Some(callback),
+                userdata
+            ))?;
+        }
+
+        Ok(outputs)
+    }
+
     /// Build a derivation and return its outputs.
     ///
     /// **Requires Nix 2.33 or later.**
