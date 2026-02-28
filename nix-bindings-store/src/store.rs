@@ -1,5 +1,4 @@
 use anyhow::{bail, Error, Result};
-use lazy_static::lazy_static;
 use nix_bindings_store_sys as raw;
 use nix_bindings_util::context::Context;
 use nix_bindings_util::string_return::{
@@ -13,19 +12,17 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
 use std::ptr::null_mut;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 #[cfg(nix_at_least = "2.31")]
 use crate::derivation::Derivation;
 use crate::path::StorePath;
 
 /* TODO make Nix itself thread safe */
-lazy_static! {
-    static ref INIT: Result<()> = unsafe {
-        check_call!(raw::libstore_init(&mut Context::new()))?;
-        Ok(())
-    };
-}
+static INIT: LazyLock<Result<()>> = LazyLock::new(|| unsafe {
+    check_call!(raw::libstore_init(&mut Context::new()))?;
+    Ok(())
+});
 
 struct StoreRef {
     inner: NonNull<raw::Store>,
@@ -68,9 +65,8 @@ impl StoreWeak {
 /// Protects against https://github.com/NixOS/nix/issues/11979 (unless different parameters are passed, in which case it's up to luck, but you do get your own parameters as you asked for).
 type StoreCacheMap = HashMap<(Option<String>, Vec<(String, String)>), StoreWeak>;
 
-lazy_static! {
-    static ref STORE_CACHE: Arc<Mutex<StoreCacheMap>> = Arc::new(Mutex::new(HashMap::new()));
-}
+static STORE_CACHE: LazyLock<Arc<Mutex<StoreCacheMap>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 #[cfg(nix_at_least = "2.31")]
 unsafe extern "C" fn callback_get_result_store_path_set(
@@ -276,6 +272,20 @@ impl Store {
         r
     }
 
+    #[doc(alias = "nix_store_get_version")]
+    pub fn get_version(&mut self) -> Result<String> {
+        let mut r = result_string_init!();
+        unsafe {
+            check_call!(raw::store_get_version(
+                &mut self.context,
+                self.inner.ptr(),
+                Some(callback_get_result_string),
+                callback_get_result_string_data(&mut r)
+            ))
+        }?;
+        r
+    }
+
     #[doc(alias = "nix_store_parse_path")]
     pub fn parse_store_path(&mut self, path: &str) -> Result<StorePath> {
         let path = CString::new(path)?;
@@ -377,6 +387,53 @@ impl Store {
             ))
         }?;
         Ok(r)
+    }
+
+    /// Builds any Nix store paths.
+    ///
+    /// **Requires Determinate Nix 3.11 or later.**
+    #[cfg(nix_at_least = "2.31")]
+    #[doc(alias = "nix_store_build_paths")]
+    pub fn build_paths(&mut self, paths: &[&StorePath]) -> Result<BTreeMap<String, String>> {
+        let mut outputs = BTreeMap::new();
+        let userdata = &mut outputs as *mut BTreeMap<String, String> as *mut std::os::raw::c_void;
+
+        unsafe extern "C" fn callback(
+            userdata: *mut std::os::raw::c_void,
+            path: *const c_char,
+            result: *const c_char,
+        ) {
+            let outputs = userdata as *mut BTreeMap<String, String>;
+            let outputs = &mut *outputs;
+
+            let path = std::ffi::CStr::from_ptr(path)
+                .to_string_lossy()
+                .into_owned();
+
+            let result = std::ffi::CStr::from_ptr(result)
+                .to_string_lossy()
+                .into_owned();
+
+            outputs.insert(path, result);
+        }
+
+        let mut paths: Vec<*const raw::StorePath> = paths
+            .iter()
+            .map(|p| unsafe { p.as_ptr() as *const raw::StorePath })
+            .collect();
+
+        unsafe {
+            check_call!(raw::store_build_paths(
+                &mut self.context,
+                self.inner.ptr(),
+                paths.as_mut_ptr(),
+                paths.len() as std::os::raw::c_uint,
+                Some(callback),
+                userdata
+            ))?;
+        }
+
+        Ok(outputs)
     }
 
     /// Build a derivation and return its outputs.
@@ -614,6 +671,15 @@ mod tests {
             }
             _ => panic!("Expected error"),
         }
+    }
+
+    #[test]
+    fn version() {
+        let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
+        assert_eq!(store.get_version().unwrap(), String::new());
+
+        let mut store = crate::store::Store::open(None, []).unwrap();
+        assert_ne!(store.get_version().unwrap(), String::new());
     }
 
     #[test]
