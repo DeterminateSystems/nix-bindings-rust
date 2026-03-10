@@ -24,6 +24,7 @@ static INIT: LazyLock<Result<()>> = LazyLock::new(|| unsafe {
     Ok(())
 });
 
+#[clippy::has_significant_drop]
 struct StoreRef {
     inner: NonNull<raw::Store>,
 }
@@ -135,6 +136,7 @@ fn callback_make_drv_outputs_data(vec: &mut HashMap<String, String>) -> *mut std
     vec as *mut HashMap<String, String> as *mut std::os::raw::c_void
 }
 
+#[clippy::has_significant_drop]
 pub struct Store {
     inner: Arc<StoreRef>,
     /* An error context to reuse. This way we don't have to allocate them for each store operation. */

@@ -196,6 +196,7 @@ impl EvalStateWeak {
     }
 }
 
+#[clippy::has_significant_drop]
 struct EvalStateRef {
     eval_state: NonNull<raw::EvalState>,
 }
@@ -351,6 +352,12 @@ impl EvalStateBuilder {
     }
 }
 
+/// An abstraction over the underlying eval state.
+///
+/// When an `EvalState` is constructed, it will allocate a number of threads to be used for
+/// evaluating expressions. These threads will remain allocated until all instances of the
+/// `EvalState` have been dropped.
+#[clippy::has_significant_drop]
 pub struct EvalState {
     eval_state: Arc<EvalStateRef>,
     store: Store,
