@@ -1,8 +1,8 @@
-use crate::eval_state::{EvalState, EvalStateWeak};
+use crate::eval_state::{EvalState, EvalStateError, EvalStateWeak};
 use crate::value::Value;
-use anyhow::Result;
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_util::check_call;
+use std::error::Error;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::mem::ManuallyDrop;
 use std::ptr::{null, null_mut};
@@ -38,8 +38,8 @@ impl PrimOp {
     pub fn new<const N: usize>(
         eval_state: &mut EvalState,
         meta: PrimOpMeta<N>,
-        f: Box<dyn Fn(&mut EvalState, &[Value; N]) -> Result<Value>>,
-    ) -> Result<PrimOp> {
+        f: Box<dyn Fn(&mut EvalState, &[Value; N]) -> Result<Value, Box<dyn Error>>>,
+    ) -> Result<PrimOp, EvalStateError> {
         assert!(N != 0);
 
         let mut args = Vec::new();
@@ -78,7 +78,7 @@ impl PrimOp {
 /// The user_data for our Nix primops
 struct PrimOpContext {
     arity: usize,
-    function: Box<dyn Fn(&mut EvalState, &[Value]) -> Result<Value>>,
+    function: Box<dyn Fn(&mut EvalState, &[Value]) -> Result<Value, Box<dyn Error>>>,
     eval_state: EvalStateWeak,
 }
 

@@ -9,7 +9,7 @@ license = "LGPL-2.1"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
+thiserror.workspace = true
 nix-bindings-util = { path = "../nix-bindings-util" }
 nix-bindings-bindgen-raw = { path = "../nix-bindings-bindgen-raw" }
 lazy_static = "1.4"

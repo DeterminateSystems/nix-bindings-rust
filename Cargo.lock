@@ -12,12 +12,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.100"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
-
-[[package]]
 name = "bindgen"
 version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -220,7 +214,6 @@ dependencies = [
 name = "nix-bindings-expr"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cstr",
  "ctor",
  "lazy_static",
@@ -228,26 +221,26 @@ dependencies = [
  "nix-bindings-store",
  "nix-bindings-util",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
 name = "nix-bindings-fetchers"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cstr",
  "ctor",
  "nix-bindings-bindgen-raw",
  "nix-bindings-store",
  "nix-bindings-util",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
 name = "nix-bindings-flake"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cstr",
  "ctor",
  "lazy_static",
@@ -257,28 +250,29 @@ dependencies = [
  "nix-bindings-store",
  "nix-bindings-util",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
 name = "nix-bindings-store"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ctor",
  "lazy_static",
  "nix-bindings-bindgen-raw",
  "nix-bindings-util",
  "pkg-config",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
 name = "nix-bindings-util"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ctor",
  "nix-bindings-bindgen-raw",
+ "thiserror",
 ]
 
 [[package]]
@@ -426,6 +420,26 @@ dependencies = [
  "once_cell",
  "rustix 1.1.2",
  "windows-sys 0.61.1",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

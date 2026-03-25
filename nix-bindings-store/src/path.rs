@@ -1,10 +1,9 @@
 use std::ptr::NonNull;
 
-use anyhow::Result;
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_util::{
-    result_string_init,
     string_return::{callback_get_result_string, callback_get_result_string_data},
+    Error, Result,
 };
 
 pub struct StorePath {
@@ -16,7 +15,7 @@ impl StorePath {
     /// For a store path like `/nix/store/abc1234...-foo-1.2`, this function will return `foo-1.2`.
     pub fn name(&self) -> Result<String> {
         unsafe {
-            let mut r = result_string_init!();
+            let mut r = Err(Error::StringInit);
             raw::store_path_name(
                 self.as_ptr(),
                 Some(callback_get_result_string),

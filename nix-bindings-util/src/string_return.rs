@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 
 /// Callback for nix_store_get_uri and other functions that return a string.
 ///
@@ -34,23 +34,17 @@ pub unsafe extern "C" fn callback_get_result_string(
         );
     }
 
-    *ret = String::from_utf8(slice.to_vec())
-        .map_err(|e| anyhow::format_err!("Nix string is not valid UTF-8: {}", e));
+    *ret = String::from_utf8(slice.to_vec()).map_err(Into::into);
 }
 
 pub fn callback_get_result_string_data(vec: &mut Result<String>) -> *mut std::os::raw::c_void {
     vec as *mut Result<String> as *mut std::os::raw::c_void
 }
 
-#[macro_export]
-macro_rules! result_string_init {
-    () => {
-        Err(anyhow::anyhow!("String was not set by Nix C API"))
-    };
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::Error;
+
     use super::*;
     use nix_bindings_bindgen_raw as raw;
 
@@ -59,7 +53,7 @@ mod tests {
 
     #[test]
     fn test_callback_get_result_string_empty() {
-        let mut ret: Result<String> = result_string_init!();
+        let mut ret: Result<String> = Err(Error::StringInit);
         let start: *const std::os::raw::c_char = std::ptr::null();
         let n: std::os::raw::c_uint = 0;
         let user_data: *mut std::os::raw::c_void = callback_get_result_string_data(&mut ret);
@@ -74,7 +68,7 @@ mod tests {
 
     #[test]
     fn test_callback_result_string() {
-        let mut ret: Result<String> = result_string_init!();
+        let mut ret: Result<String> = Err(Error::StringInit);
         let start: *const std::os::raw::c_char = b"helloGARBAGE".as_ptr() as *const i8;
         let n: std::os::raw::c_uint = 5;
         let user_data: *mut std::os::raw::c_void = callback_get_result_string_data(&mut ret);

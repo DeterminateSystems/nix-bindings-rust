@@ -1,8 +1,10 @@
-use anyhow::{bail, Result};
 use nix_bindings_bindgen_raw as raw;
 use std::os::raw::c_char;
 use std::ptr::null_mut;
 use std::ptr::NonNull;
+
+use crate::NixError;
+use crate::Result;
 
 /// A context for error handling, when interacting directly with the generated bindings for the C API in [nix_bindings_bindgen_raw].
 ///
@@ -40,8 +42,9 @@ impl Context {
             // msgp is a borrowed pointer (pointing into the context), so we don't need to free it
             let msgp = unsafe { raw::err_msg(null_mut(), self.inner.as_ptr(), null_mut()) };
             // Turn the i8 pointer into a Rust string by copying
-            let msg: &str = unsafe { core::ffi::CStr::from_ptr(msgp).to_str()? };
-            bail!("{}", msg);
+            let msg = unsafe { core::ffi::CStr::from_ptr(msgp).to_str()? };
+
+            Err(NixError::new(err, msg.to_string()))?;
         }
         Ok(())
     }
@@ -131,6 +134,8 @@ pub use check_call_opt_key;
 
 #[cfg(test)]
 mod tests {
+    use crate::Error;
+
     use super::*;
 
     #[test]
@@ -143,8 +148,8 @@ mod tests {
         unsafe {
             raw::set_err_msg(
                 ctx_ptr,
-                raw::err_NIX_ERR_UNKNOWN.try_into().unwrap(),
-                b"dummy error message\0".as_ptr() as *const i8,
+                raw::err_NIX_ERR_UNKNOWN,
+                c"dummy error message".as_ptr(),
             );
         }
     }
@@ -153,6 +158,12 @@ mod tests {
     fn check_call_dynamic_context() {
         let r = check_call!(set_dummy_err(&mut Context::new()));
         assert!(r.is_err());
-        assert_eq!(r.unwrap_err().to_string(), "dummy error message");
+        let s = match r {
+            Ok(_) => panic!("expected error"),
+            Err(Error::Nix(NixError::Unknown(e))) => e.to_string(),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
+        };
+
+        assert_eq!(s, "dummy error message");
     }
 }

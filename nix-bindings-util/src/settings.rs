@@ -1,10 +1,10 @@
-use anyhow::Result;
 use nix_bindings_bindgen_raw as raw;
 use std::sync::Mutex;
 
 use crate::{
-    check_call, context, result_string_init,
+    check_call, context,
     string_return::{callback_get_result_string, callback_get_result_string_data},
+    Error, Result,
 };
 
 // Global mutex to protect concurrent access to Nix settings
@@ -51,7 +51,7 @@ pub fn get(key: &str) -> Result<String> {
 
     let mut ctx = context::Context::new();
     let key = std::ffi::CString::new(key)?;
-    let mut r: Result<String> = result_string_init!();
+    let mut r: Result<String> = Err(Error::StringInit);
     unsafe {
         check_call!(raw::setting_get(
             &mut ctx,

@@ -8,7 +8,7 @@ license = "LGPL-2.1"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
+thiserror.workspace = true
 nix-bindings-expr = { path = "../nix-bindings-expr" }
 nix-bindings-fetchers = { path = "../nix-bindings-fetchers" }
 nix-bindings-store = { path = "../nix-bindings-store" }

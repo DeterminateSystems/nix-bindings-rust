@@ -17,10 +17,10 @@
 //! Create an [`EvalState`] using [`EvalState::new`] or [`EvalStateBuilder`] for advanced configuration:
 //!
 //! ```rust
-//! # use nix_bindings_expr::eval_state::{EvalState, EvalStateBuilder, test_init, gc_register_my_thread};
+//! # use nix_bindings_expr::eval_state::{EvalState, EvalStateBuilder, test_init, gc_register_my_thread, Result};
 //! # use nix_bindings_store::store::Store;
 //! # use std::collections::HashMap;
-//! # fn example() -> anyhow::Result<()> {
+//! # fn example() -> Result<()> {
 //! # test_init(); let guard = gc_register_my_thread()?;
 //! let store = Store::open(None, HashMap::new())?;
 //!
@@ -71,8 +71,8 @@
 //! Before using [`EvalState`] in a thread, register it with the (process memory) garbage collector:
 //!
 //! ```rust,no_run
-//! # use nix_bindings_expr::eval_state::{init, gc_register_my_thread, test_init};
-//! # fn example() -> anyhow::Result<()> {
+//! # use nix_bindings_expr::eval_state::{init, gc_register_my_thread, test_init, Result};
+//! # fn example() -> Result<()> {
 //! # test_init(); // Use test_init() in tests
 //! init()?; // Initialize Nix library
 //! let guard = gc_register_my_thread()?; // Register thread with GC
@@ -92,11 +92,11 @@
 //! ## Examples
 //!
 //! ```rust
-//! use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+//! use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread, Result};
 //! use nix_bindings_store::store::Store;
 //! use std::collections::HashMap;
 //!
-//! # fn main() -> anyhow::Result<()> {
+//! # fn main() -> Result<()> {
 //! test_init(); // init() in non-test code
 //! let guard = gc_register_my_thread()?;
 //!
@@ -130,24 +130,57 @@
 
 use crate::primop;
 use crate::value::{Int, Value, ValueType};
-use anyhow::Context as _;
-use anyhow::{bail, Result};
 use cstr::cstr;
 use lazy_static::lazy_static;
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_store::path::StorePath;
 use nix_bindings_store::store::{Store, StoreWeak};
 use nix_bindings_util::context::Context;
-use nix_bindings_util::string_return::{callback_get_result_string, callback_get_result_string_data};
-use nix_bindings_util::{check_call, check_call_opt_key, result_string_init};
-use std::ffi::{c_char, CString};
+use nix_bindings_util::string_return::{
+    callback_get_result_string, callback_get_result_string_data,
+};
+use nix_bindings_util::{
+    check_call, check_call_opt_key, Error as NixBindingsError, GcError, NixError,
+};
+use std::ffi::{c_char, CString, NulError};
 use std::iter::FromIterator;
 use std::os::raw::c_uint;
 use std::ptr::{null, null_mut, NonNull};
+use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 use std::sync::{Arc, Weak};
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, EvalStateError>;
+
+#[derive(Error, Debug)]
+pub enum EvalStateError {
+    #[error("attribute {0} not found")]
+    MissingAttribute(String),
+    #[error("expected a value of type {expected:?}, but got {received:?} instead")]
+    UnexpectedValueType {
+        expected: ValueType,
+        received: ValueType,
+    },
+    #[error("{arg} contains null byte")]
+    NulError {
+        arg: &'static str,
+        #[source]
+        err: NulError,
+    },
+    #[error("{0} returned a null pointer")]
+    NullPointer(&'static str),
+
+    #[error(transparent)]
+    NixBindings(#[from] NixBindingsError),
+    #[error(transparent)]
+    StrUtf8Error(#[from] Utf8Error),
+    #[error(transparent)]
+    StringUtf8Error(#[from] FromUtf8Error),
+}
 
 lazy_static! {
-    static ref INIT: Result<()> = {
+    static ref INIT: nix_bindings_util::Result<()> = {
         unsafe {
             raw::GC_allow_register_threads();
             check_call!(raw::libexpr_init(&mut Context::new()))?;
@@ -156,14 +189,11 @@ lazy_static! {
     };
 }
 
-pub fn init() -> Result<()> {
+pub fn init() -> nix_bindings_util::Result<()> {
     let x = INIT.as_ref();
     match x {
         Ok(_) => Ok(()),
-        Err(e) => {
-            // Couldn't just clone the error, so we have to print it here.
-            Err(anyhow::format_err!("nix_bindings_expr::init error: {}", e))
-        }
+        Err(e) => Err(NixBindingsError::NixBindingsExprInit(e)),
     }
 }
 
@@ -225,10 +255,10 @@ impl Drop for EvalStateRef {
 /// # Examples
 ///
 /// ```rust
-/// # use nix_bindings_expr::eval_state::{EvalState, EvalStateBuilder, test_init, gc_register_my_thread};
+/// # use nix_bindings_expr::eval_state::{EvalState, EvalStateBuilder, test_init, gc_register_my_thread, Result};
 /// # use nix_bindings_store::store::Store;
 /// # use std::collections::HashMap;
-/// # fn example() -> anyhow::Result<()> {
+/// # fn example() -> Result<()> {
 /// # test_init();
 /// # let guard = gc_register_my_thread()?;
 /// let store = Store::open(None, HashMap::new())?;
@@ -271,8 +301,9 @@ impl EvalStateBuilder {
         let lookup_path: Vec<CString> = path
             .into_iter()
             .map(|path| {
-                CString::new(path).with_context(|| {
-                    format!("EvalStateBuilder::lookup_path: path `{path}` contains null byte")
+                CString::new(path).map_err(|e| EvalStateError::NulError {
+                    arg: "path",
+                    err: e,
                 })
             })
             .collect::<Result<_>>()?;
@@ -369,12 +400,12 @@ impl EvalState {
     /// # Examples
     ///
     /// ```
-    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread, Result};
     /// use nix_bindings_store::store::Store;
     /// use nix_bindings_expr::value::Value;
     /// use std::collections::HashMap;
     ///
-    /// # fn main() -> anyhow::Result<()> {
+    /// # fn main() -> Result<()> {
     /// # test_init();
     /// # let guard = gc_register_my_thread()?;
     /// # let mut es = EvalState::new(Store::open(None, HashMap::new())?, [])?;
@@ -389,10 +420,14 @@ impl EvalState {
     #[doc(alias = "eval")]
     #[doc(alias = "evaluate")]
     pub fn eval_from_string(&mut self, expr: &str, path: &str) -> Result<Value> {
-        let expr_ptr =
-            CString::new(expr).with_context(|| "eval_from_string: expr contains null byte")?;
-        let path_ptr =
-            CString::new(path).with_context(|| "eval_from_string: path contains null byte")?;
+        let expr_ptr = CString::new(expr).map_err(|e| EvalStateError::NulError {
+            arg: "expr",
+            err: e,
+        })?;
+        let path_ptr = CString::new(path).map_err(|e| EvalStateError::NulError {
+            arg: "path",
+            err: e,
+        })?;
         unsafe {
             let value = self.new_value_uninitialized()?;
             check_call!(raw::expr_eval_from_string(
@@ -474,10 +509,10 @@ impl EvalState {
     /// # Examples
     ///
     /// ```rust
-    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread, Result};
     /// # use nix_bindings_store::store::Store;
     /// # use std::collections::HashMap;
-    /// # fn example() -> anyhow::Result<()> {
+    /// # fn example() -> Result<()> {
     /// # test_init();
     /// # let guard = gc_register_my_thread()?;
     /// let store = Store::open(None, HashMap::new())?;
@@ -497,9 +532,12 @@ impl EvalState {
     pub fn require_int(&mut self, v: &Value) -> Result<Int> {
         let t = self.value_type(v)?;
         if t != ValueType::Int {
-            bail!("expected an int, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::Int,
+                received: t,
+            })?
         }
-        unsafe { check_call!(raw::get_int(&mut self.context, v.raw_ptr())) }
+        unsafe { check_call!(raw::get_int(&mut self.context, v.raw_ptr())) }.map_err(Into::into)
     }
 
     /// Extracts the value from a [boolean][`ValueType::Bool`] Nix value.
@@ -513,9 +551,12 @@ impl EvalState {
     pub fn require_bool(&mut self, v: &Value) -> Result<bool> {
         let t = self.value_type(v)?;
         if t != ValueType::Bool {
-            bail!("expected a bool, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::Bool,
+                received: t,
+            })?
         }
-        unsafe { check_call!(raw::get_bool(&mut self.context, v.raw_ptr())) }
+        unsafe { check_call!(raw::get_bool(&mut self.context, v.raw_ptr())) }.map_err(Into::into)
     }
 
     /// Extracts all elements from a [list][`ValueType::List`] Nix value.
@@ -529,9 +570,10 @@ impl EvalState {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # use nix_bindings_expr::eval_state::Result;
     /// # use nix_bindings_expr::value::Value;
     /// # use std::collections::{VecDeque, LinkedList};
-    /// # fn example(es: &mut nix_bindings_expr::eval_state::EvalState, list_value: &Value) -> anyhow::Result<()> {
+    /// # fn example(es: &mut nix_bindings_expr::eval_state::EvalState, list_value: &Value) -> Result<()> {
     /// let vec: Vec<Value> = es.require_list_strict(&list_value)?;
     /// let deque: VecDeque<Value> = es.require_list_strict(&list_value)?;
     /// let linked_list = es.require_list_strict::<LinkedList<Value>>(&list_value)?;
@@ -549,7 +591,10 @@ impl EvalState {
     {
         let t = self.value_type(value)?;
         if t != ValueType::List {
-            bail!("expected a list, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::List,
+                received: t,
+            })?
         }
         let size = unsafe { check_call!(raw::get_list_size(&mut self.context, value.raw_ptr())) }?;
 
@@ -591,7 +636,10 @@ impl EvalState {
     pub fn require_attrs_names_unsorted(&mut self, v: &Value) -> Result<Vec<String>> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
-            bail!("expected an attrset, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::AttrSet,
+                received: t,
+            })?
         }
         let n = unsafe { check_call!(raw::get_attrs_size(&mut self.context, v.raw_ptr())) }?;
         let mut attrs = Vec::with_capacity(n as usize);
@@ -605,9 +653,7 @@ impl EvalState {
                 ))
             }?;
             let cstr = unsafe { std::ffi::CStr::from_ptr(cstr_ptr) };
-            let s = cstr
-                .to_str()
-                .map_err(|e| anyhow::format_err!("Nix attrset key is not valid UTF-8: {}", e))?;
+            let s = cstr.to_str()?;
             attrs.insert(i as usize, s.to_owned());
         }
         Ok(attrs)
@@ -624,10 +670,16 @@ impl EvalState {
     pub fn require_attrs_select(&mut self, v: &Value, attr_name: &str) -> Result<Value> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
-            bail!("expected an attrset, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::AttrSet,
+                received: t,
+            })?
         }
-        let attr_name = CString::new(attr_name)
-            .with_context(|| "require_attrs_select: attrName contains null byte")?;
+
+        let attr_name = CString::new(attr_name).map_err(|e| EvalStateError::NulError {
+            arg: "attrName",
+            err: e,
+        })?;
         unsafe {
             let v2 = check_call!(raw::get_attr_byname(
                 &mut self.context,
@@ -642,11 +694,15 @@ impl EvalState {
                     // is simply missing, so we provide a better one. (Note that
                     // missing attributes requested by Nix expressions OTOH is a
                     // different error message which works fine.)
-                    if e.to_string() == "missing attribute" {
-                        bail!("attribute `{}` not found", attr_name.to_string_lossy());
-                    } else {
-                        Err(e)
+                    if let NixBindingsError::Nix(NixError::Key(e)) = &e {
+                        if e.eq("missing attribute") {
+                            Err(EvalStateError::MissingAttribute(
+                                attr_name.to_string_lossy().to_string(),
+                            ))?
+                        }
                     }
+
+                    Err(e)?
                 }
             }
         }
@@ -673,10 +729,15 @@ impl EvalState {
     ) -> Result<Option<Value>> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
-            bail!("expected an attrset, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::AttrSet,
+                received: t,
+            })?
         }
-        let attr_name = CString::new(attr_name)
-            .with_context(|| "require_attrs_select_opt: attrName contains null byte")?;
+        let attr_name = CString::new(attr_name).map_err(|e| EvalStateError::NulError {
+            arg: "attrName",
+            err: e,
+        })?;
         let v2 = unsafe {
             check_call_opt_key!(raw::get_attr_byname(
                 &mut self.context,
@@ -701,7 +762,10 @@ impl EvalState {
     pub fn require_list_size(&mut self, v: &Value) -> Result<u32> {
         let t = self.value_type(v)?;
         if t != ValueType::List {
-            bail!("expected a list, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::List,
+                received: t,
+            })?
         }
         let ret = unsafe { check_call!(raw::get_list_size(&mut self.context, v.raw_ptr())) }?;
         Ok(ret)
@@ -725,7 +789,10 @@ impl EvalState {
     pub fn require_list_select_idx_strict(&mut self, v: &Value, idx: u32) -> Result<Option<Value>> {
         let t = self.value_type(v)?;
         if t != ValueType::List {
-            bail!("expected a list, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::List,
+                received: t,
+            })?
         }
 
         // TODO: Remove this bounds checking once https://github.com/NixOS/nix/pull/14030
@@ -755,7 +822,7 @@ impl EvalState {
     #[doc(alias = "create_string")]
     #[doc(alias = "string_value")]
     pub fn new_value_str(&mut self, s: &str) -> Result<Value> {
-        let s = CString::new(s).with_context(|| "new_value_str: contains null byte")?;
+        let s = CString::new(s).map_err(|e| EvalStateError::NulError { arg: "s", err: e })?;
         let v = unsafe {
             let value = self.new_value_uninitialized()?;
             check_call!(raw::init_string(
@@ -794,11 +861,14 @@ impl EvalState {
     pub fn new_value_thunk(
         &mut self,
         name: &str,
-        f: Box<dyn Fn(&mut EvalState) -> Result<Value>>,
+        f: Box<dyn Fn(&mut EvalState) -> std::result::Result<Value, Box<dyn std::error::Error>>>,
     ) -> Result<Value> {
         // Nix doesn't have a function for creating a thunk, so we have to
         // create a function and pass it a dummy argument.
-        let name = CString::new(name).with_context(|| "new_thunk: name contains null byte")?;
+        let name = CString::new(name).map_err(|e| EvalStateError::NulError {
+            arg: "name",
+            err: e,
+        })?;
         let primop = primop::PrimOp::new(
             self,
             primop::PrimOpMeta {
@@ -818,7 +888,7 @@ impl EvalState {
 
     /// Not exposed, because the caller must always explicitly handle the context or not accept one at all.
     fn get_string(&mut self, value: &Value) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(NixBindingsError::StringInit);
         unsafe {
             check_call!(raw::get_string(
                 &mut self.context,
@@ -827,7 +897,7 @@ impl EvalState {
                 callback_get_result_string_data(&mut r)
             ))?;
         };
-        r
+        Ok(r?)
     }
     /// Extracts a string value from a [string][`ValueType::String`] Nix value.
     ///
@@ -842,7 +912,10 @@ impl EvalState {
     pub fn require_string(&mut self, value: &Value) -> Result<String> {
         let t = self.value_type(value)?;
         if t != ValueType::String {
-            bail!("expected a string, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::String,
+                received: t,
+            })?
         }
         self.get_string(value)
     }
@@ -860,7 +933,10 @@ impl EvalState {
     ) -> Result<RealisedString> {
         let t = self.value_type(value)?;
         if t != ValueType::String {
-            bail!("expected a string, but got a {:?}", t);
+            Err(EvalStateError::UnexpectedValueType {
+                expected: ValueType::String,
+                received: t,
+            })?
         }
 
         let rs = unsafe {
@@ -876,8 +952,7 @@ impl EvalState {
             let start = raw::realised_string_get_buffer_start(rs) as *const u8;
             let size = raw::realised_string_get_buffer_size(rs);
             let slice = std::slice::from_raw_parts(start, size);
-            String::from_utf8(slice.to_vec())
-                .map_err(|e| anyhow::format_err!("Nix string is not valid UTF-8: {}", e))?
+            String::from_utf8(slice.to_vec())?
         };
 
         let paths = unsafe {
@@ -886,9 +961,7 @@ impl EvalState {
             for i in 0..n {
                 let path = raw::realised_string_get_store_path(rs, i);
                 let path = NonNull::new(path as *mut raw::StorePath).ok_or_else(|| {
-                    anyhow::format_err!(
-                        "nix_realised_string_get_store_path returned a null pointer"
-                    )
+                    EvalStateError::NullPointer("nix_realised_string_get_store_path")
                 })?;
                 paths.push(StorePath::new_raw_clone(path));
             }
@@ -942,10 +1015,10 @@ impl EvalState {
     /// # Examples
     ///
     /// ```rust
-    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread, Result};
     /// # use nix_bindings_store::store::Store;
     /// # use std::collections::HashMap;
-    /// # fn example() -> anyhow::Result<()> {
+    /// # fn example() -> Result<()> {
     /// # test_init();
     /// # let guard = gc_register_my_thread()?;
     /// let store = Store::open(None, HashMap::new())?;
@@ -1043,10 +1116,10 @@ impl EvalState {
     /// # Examples
     ///
     /// ```rust
-    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread};
+    /// # use nix_bindings_expr::eval_state::{EvalState, test_init, gc_register_my_thread, Result};
     /// # use nix_bindings_store::store::Store;
     /// # use std::collections::HashMap;
-    /// # fn example() -> anyhow::Result<()> {
+    /// # fn example() -> Result<()> {
     /// # test_init();
     /// # let guard = gc_register_my_thread()?;
     /// let store = Store::open(None, HashMap::new())?;
@@ -1084,8 +1157,10 @@ impl EvalState {
         let size = iter.len();
         let bindings_builder = BindingsBuilder::new(self, size)?;
         for (name, value) in iter {
-            let name =
-                CString::new(name).with_context(|| "new_value_attrs: name contains null byte")?;
+            let name = CString::new(name).map_err(|e| EvalStateError::NulError {
+                arg: "name",
+                err: e,
+            })?;
             unsafe {
                 check_call!(raw::bindings_builder_insert(
                     &mut self.context,
@@ -1157,20 +1232,25 @@ impl Drop for ThreadRegistrationGuard {
     }
 }
 
-fn gc_register_my_thread_do_it() -> Result<()> {
+fn gc_register_my_thread_do_it() -> nix_bindings_util::Result<()> {
     unsafe {
         let mut sb: raw::GC_stack_base = raw::GC_stack_base {
             mem_base: null_mut(),
         };
         let r = raw::GC_get_stack_base(&mut sb);
         if r as u32 != raw::GC_SUCCESS {
-            Err(anyhow::format_err!("GC_get_stack_base failed: {}", r))?;
+            Err(GcError::from(r))?;
         }
         raw::GC_register_my_thread(&sb);
         Ok(())
     }
 }
 
+/// Register the calling thread with the Nix garbage collector.
+///
+/// # Errors
+///
+/// The returned `Err` will be of type [`Error::GcStackBase`](nix_bindings_util::Error::GcStackBase).
 #[doc(alias = "register_thread")]
 #[doc(alias = "thread_setup")]
 #[doc(alias = "gc_register")]
@@ -1217,7 +1297,8 @@ pub fn test_init() {
     // which causes an error. So we set a custom build dir here.
     // Only available on linux
     if cfg!(target_os = "linux") {
-        nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test").unwrap();
+        nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test")
+            .unwrap();
     }
     std::env::set_var("_NIX_TEST_NO_SANDBOX", "1");
 
@@ -1230,6 +1311,7 @@ mod tests {
     use super::*;
     use cstr::cstr;
     use ctor::ctor;
+    use nix_bindings_util::NixError;
     use std::collections::HashMap;
     use std::fs::read_dir;
     use std::io::Write as _;
@@ -1462,11 +1544,13 @@ mod tests {
             let v = es.eval_from_string("1", "<test>").unwrap();
             es.force(&v).unwrap();
             let r = es.require_attrs_names_unsorted(&v);
-            assert!(r.is_err());
-            assert_eq!(
-                r.unwrap_err().to_string(),
-                "expected an attrset, but got a Int"
-            );
+            assert!(matches!(
+                r,
+                Err(EvalStateError::UnexpectedValueType {
+                    expected: ValueType::AttrSet,
+                    received: ValueType::Int
+                })
+            ));
         })
         .unwrap()
     }
@@ -1498,16 +1582,7 @@ mod tests {
             assert_eq!(es.require_string(&a).unwrap(), "aye");
             assert_eq!(es.require_string(&b).unwrap(), "bee");
             let missing = es.require_attrs_select(&v, "c");
-            match missing {
-                Ok(_) => panic!("expected an error"),
-                Err(e) => {
-                    let s = format!("{e:#}");
-                    if !s.contains("attribute `c` not found") {
-                        eprintln!("unexpected error message: {}", s);
-                        assert!(false);
-                    }
-                }
-            }
+            assert!(matches!(missing, Err(EvalStateError::MissingAttribute(_))));
         })
         .unwrap()
     }
@@ -1536,12 +1611,15 @@ mod tests {
             let r = es.require_attrs_select(&v, "a");
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("oh no the error") {
-                        eprintln!("unexpected error message: {}", e);
-                        assert!(false);
+                        eprintln!("{e:?}");
+                        panic!("unexpected error message: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an err of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap()
@@ -1588,12 +1666,14 @@ mod tests {
             let r = es.require_attrs_select_opt(&v, "a");
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(nix_bindings_util::Error::Nix(NixError::Nix(
+                    e,
+                )))) => {
                     if !e.to_string().contains("oh no the error") {
-                        eprintln!("unexpected error message: {}", e);
-                        assert!(false);
+                        panic!("unexpected error message: {}", e);
                     }
                 }
+                Err(e) => panic!("expected an underlying Nix error, but got {e:?}"),
             }
         })
         .unwrap()
@@ -1639,7 +1719,7 @@ mod tests {
             // TODO: safe print value (like Nix would)
             assert_eq!(
                 r.unwrap_err().to_string(),
-                "expected a string, but got a Bool"
+                "expected a value of type String, but got Bool instead"
             );
         })
         .unwrap()
@@ -1656,7 +1736,7 @@ mod tests {
             assert!(r.is_err());
             assert_eq!(
                 r.unwrap_err().to_string(),
-                "expected a string, but got a Path"
+                "expected a value of type String, but got Path instead"
             );
         })
         .unwrap()
@@ -1675,10 +1755,12 @@ mod tests {
             assert!(t == Some(ValueType::String));
             let r = es.require_string(&v);
             assert!(r.is_err());
-            assert!(r
-                .unwrap_err()
-                .to_string()
-                .contains("Nix string is not valid UTF-8"));
+            assert!(matches!(
+                r,
+                Err(EvalStateError::NixBindings(
+                    nix_bindings_util::Error::StringUtf8Error(_)
+                ))
+            ))
         })
         .unwrap();
     }
@@ -1727,7 +1809,7 @@ mod tests {
             let t = es.value_type_unforced(&v);
             assert!(t == Some(ValueType::String));
             let s = es.require_string(&v).unwrap();
-            assert!(s == "");
+            assert!(s.is_empty());
         })
         .unwrap();
     }
@@ -1784,9 +1866,7 @@ mod tests {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
             let mut es = EvalState::new(store, []).unwrap();
-            let v = es
-                .eval_from_string("[ ]", "<test>")
-                .unwrap();
+            let v = es.eval_from_string("[ ]", "<test>").unwrap();
             es.force(&v).unwrap();
             let t = es.value_type_unforced(&v);
             assert!(t == Some(ValueType::List));
@@ -1831,7 +1911,7 @@ mod tests {
             let list: Vec<Value> = es.require_list_strict(&v).unwrap();
             assert_eq!(list.len(), 2);
             assert_eq!(es.require_int(&list[0]).unwrap(), 42);
-            assert_eq!(es.require_bool(&list[1]).unwrap(), true);
+            assert!(es.require_bool(&list[1]).unwrap());
         })
         .unwrap();
     }
@@ -1841,17 +1921,25 @@ mod tests {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
             let mut es = EvalState::new(store, []).unwrap();
-            let v = es.eval_from_string(r#"[(throw "_evaluated_item_")]"#, "<test>").unwrap();
+            let v = es
+                .eval_from_string(r#"[(throw "_evaluated_item_")]"#, "<test>")
+                .unwrap();
             es.force(&v).unwrap();
             // This should fail because require_list_strict evaluates all elements
-            let result: Result<Vec<Value>, _> = es.require_list_strict(&v);
+            let result: Result<Vec<Value>> = es.require_list_strict(&v);
             assert!(result.is_err());
             match result {
-                Err(error_msg) => {
+                Err(EvalStateError::NixBindings(nix_bindings_util::Error::Nix(NixError::Nix(
+                    error_msg,
+                )))) => {
                     let error_str = error_msg.to_string();
                     assert!(error_str.contains("_evaluated_item_"));
                 }
-                Ok(_) => panic!("unexpected success. The item should have been evaluated and its error propagated.")
+                Ok(_) => panic!(
+                    "unexpected success. The item should have \
+                    been evaluated and its error propagated."
+                ),
+                Err(e) => panic!("expected an underlying Nix error, but received {e:?}"),
             }
         })
         .unwrap();
@@ -1990,12 +2078,14 @@ mod tests {
             let r = es.call(f, a);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("cannot coerce") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message didn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2013,12 +2103,14 @@ mod tests {
             let r = es.call_multi(&f, &[a, b]);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("expected an integer but found") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message doesn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2037,12 +2129,14 @@ mod tests {
             let res = es.force(&r);
             match res {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("cannot coerce") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message didn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2059,12 +2153,14 @@ mod tests {
             let r = es.call(f, a);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("called without required argument") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message didn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2082,12 +2178,14 @@ mod tests {
             let r = es.call_multi(&f, &[a, b]);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("called without required argument") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message didn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2107,12 +2205,14 @@ mod tests {
             let res = es.force(&r);
             match res {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("called without required argument") {
-                        eprintln!("{}", e);
-                        assert!(false);
+                        panic!("error message didn't contain expected string: {}", e);
                     }
                 }
+                Err(e) => panic!(
+                    "expected an error of type EvalStateError::NixBindings, but received {e:?}"
+                ),
             }
         })
         .unwrap();
@@ -2252,7 +2352,9 @@ mod tests {
                     },
                     Box::new(move |es, [a]| {
                         let a = es.require_int(a)?;
-                        bail!("error with arg [{}]", a);
+                        Err(EvalStateError::MissingAttribute(format!(
+                            "error with arg [{a}]"
+                        )))?
                     }),
                 )
                 .unwrap();
@@ -2264,12 +2366,13 @@ mod tests {
             let r = es.call(f, a);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("error with arg [2]") {
                         eprintln!("unexpected error message: {}", e);
                         assert!(false);
                     }
                 }
+                Err(e) => panic!("expected an EvalStateError::NixBindings, but got {e:?}"),
             }
         })
         .unwrap();
@@ -2305,14 +2408,16 @@ mod tests {
                 .new_value_thunk(
                     "test_thunk",
                     Box::new(move |_| {
-                        bail!("error message in test case eval_state_primop_anon_call_no_args_lazy")
+                        Err(EvalStateError::MissingAttribute(String::from(
+                            "error message in test case eval_state_primop_anon_call_no_args_lazy",
+                        )))?
                     }),
                 )
                 .unwrap();
             let r = es.force(&v);
             match r {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains(
                         "error message in test case eval_state_primop_anon_call_no_args_lazy",
                     ) {
@@ -2323,6 +2428,9 @@ mod tests {
                         eprintln!("unexpected error message: {}", e);
                         assert!(false);
                     }
+                }
+                Err(e) => {
+                    panic!("expected an EvalStateError::NixBindings, but got {e:?} instead")
                 }
             }
         })
@@ -2374,14 +2482,18 @@ mod tests {
                     doc: cstr!("Frobnicates widgets"),
                     args: [cstr!("x")],
                 },
-                Box::new(|_es, _args| bail!("The frob unexpectedly fizzled")),
+                Box::new(|_es, _args| {
+                    Err(EvalStateError::MissingAttribute(String::from(
+                        "The frob unexpectedly fizzled",
+                    )))?
+                }),
             )
             .unwrap();
             let f = es.new_value_primop(primop).unwrap();
             let a = es.new_value_int(0).unwrap();
             match es.call(f, a) {
                 Ok(_) => panic!("expected an error"),
-                Err(e) => {
+                Err(EvalStateError::NixBindings(NixBindingsError::Nix(NixError::Nix(e)))) => {
                     if !e.to_string().contains("The frob unexpectedly fizzled") {
                         eprintln!("unexpected error message: {}", e);
                         assert!(false);
@@ -2390,6 +2502,9 @@ mod tests {
                         eprintln!("unexpected error message: {}", e);
                         assert!(false);
                     }
+                }
+                Err(e) => {
+                    panic!("expected an EvalStateError::NixBindings, but got {e:?} instead")
                 }
             }
         })
@@ -2566,13 +2681,13 @@ mod tests {
             let v = es.eval_from_string("42", "<test>").unwrap();
 
             let r = es.require_list_select_idx_strict(&v, 0);
-            match r {
-                Ok(_) => panic!("expected an error"),
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    assert!(err_msg.contains("expected a list, but got a"));
-                }
-            }
+            assert!(matches!(
+                r,
+                Err(EvalStateError::UnexpectedValueType {
+                    expected: ValueType::List,
+                    received: ValueType::Int
+                })
+            ));
         })
         .unwrap();
     }
@@ -2633,13 +2748,13 @@ mod tests {
             let v = es.eval_from_string("\"not a list\"", "<test>").unwrap();
 
             let r = es.require_list_size(&v);
-            match r {
-                Ok(_) => panic!("expected an error"),
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    assert!(err_msg.contains("expected a list, but got a"));
-                }
-            }
+            assert!(matches!(
+                r,
+                Err(EvalStateError::UnexpectedValueType {
+                    expected: ValueType::List,
+                    received: ValueType::String
+                })
+            ))
         })
         .unwrap();
     }

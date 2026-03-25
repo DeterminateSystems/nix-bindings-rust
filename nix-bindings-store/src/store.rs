@@ -1,12 +1,14 @@
-use anyhow::{bail, Error, Result};
 use lazy_static::lazy_static;
 use nix_bindings_bindgen_raw as raw;
+use nix_bindings_util::check_call;
 use nix_bindings_util::context::Context;
-use nix_bindings_util::string_return::{callback_get_result_string, callback_get_result_string_data};
-use nix_bindings_util::{check_call, result_string_init};
-use std::collections::HashMap;
+use nix_bindings_util::string_return::{
+    callback_get_result_string, callback_get_result_string_data,
+};
+use nix_bindings_util::{Error, Result};
 #[cfg(nix_at_least = "2.33")]
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::ptr::null_mut;
 use std::ptr::NonNull;
@@ -110,9 +112,7 @@ impl Store {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect::<Vec<(String, String)>>();
         let params2 = params.clone();
-        let mut store_cache = STORE_CACHE
-            .lock()
-            .map_err(|_| Error::msg("Failed to lock store cache. This should never happen."))?;
+        let mut store_cache = STORE_CACHE.lock().map_err(|_| Error::StoreCacheLock)?;
         match store_cache.entry((url.map(Into::into), params)) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 if let Some(store) = e.get().upgrade() {
@@ -145,7 +145,7 @@ impl Store {
             Ok(_) => {}
             Err(e) => {
                 // Couldn't just clone the error, so we have to print it here.
-                bail!("nix_libstore_init error: {}", e);
+                return Err(Error::LibstoreInit(e));
             }
         }
 
@@ -201,7 +201,7 @@ impl Store {
 
     #[doc(alias = "nix_store_get_uri")]
     pub fn get_uri(&mut self) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_get_uri(
                 &mut self.context,
@@ -216,7 +216,7 @@ impl Store {
     #[cfg(nix_at_least = "2.26")]
     #[doc(alias = "nix_store_get_storedir")]
     pub fn get_storedir(&mut self) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_get_storedir(
                 &mut self.context,
@@ -245,7 +245,7 @@ impl Store {
 
     #[doc(alias = "nix_store_real_path")]
     pub fn real_path(&mut self, path: &StorePath) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_real_path(
                 &mut self.context,
@@ -282,8 +282,7 @@ impl Store {
                 self.inner.ptr(),
                 json_cstr.as_ptr()
             ))?;
-            let inner = NonNull::new(drv)
-                .ok_or_else(|| Error::msg("derivation_from_json returned null"))?;
+            let inner = NonNull::new(drv).ok_or(Error::NullDerivation("derivation_from_json"))?;
             Ok(Derivation::new_raw(inner))
         }
     }
@@ -309,8 +308,7 @@ impl Store {
                 self.inner.ptr(),
                 drv.inner.as_ptr()
             ))?;
-            let path = NonNull::new(path)
-                .ok_or_else(|| Error::msg("add_derivation returned null"))?;
+            let path = NonNull::new(path).ok_or(Error::NullDerivation("add_derivation"))?;
             Ok(StorePath::new_raw(path))
         }
     }
@@ -333,7 +331,8 @@ impl Store {
     #[doc(alias = "nix_store_realise")]
     pub fn realise(&mut self, path: &StorePath) -> Result<BTreeMap<String, StorePath>> {
         let mut outputs = BTreeMap::new();
-        let userdata = &mut outputs as *mut BTreeMap<String, StorePath> as *mut std::os::raw::c_void;
+        let userdata =
+            &mut outputs as *mut BTreeMap<String, StorePath> as *mut std::os::raw::c_void;
 
         unsafe extern "C" fn callback(
             userdata: *mut std::os::raw::c_void,
@@ -428,8 +427,9 @@ impl Clone for Store {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use ctor::ctor;
+    use nix_bindings_util::NixError;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -446,7 +446,8 @@ mod tests {
 
         // Set custom build dir for sandbox
         if cfg!(target_os = "linux") {
-            nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test").ok();
+            nix_bindings_util::settings::set("sandbox-build-dir", "/custom-build-dir-for-test")
+                .ok();
         }
 
         std::env::set_var("_NIX_TEST_NO_SANDBOX", "1");
@@ -510,13 +511,14 @@ mod tests {
     #[test]
     fn parse_store_path_fail() {
         let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
-        let store_path_string = format!("bash-interactive-5.2p26");
+        let store_path_string = "bash-interactive-5.2p26".to_string();
         let r = store.parse_store_path(store_path_string.as_str());
         match r {
-            Err(e) => {
+            Err(Error::Nix(NixError::Nix(e))) => {
                 assert!(e.to_string().contains("bash-interactive-5.2p26"));
             }
-            _ => panic!("Expected error"),
+            Ok(_) => panic!("Expected error"),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         }
     }
 
@@ -658,9 +660,8 @@ mod tests {
 
     #[cfg(nix_at_least = "2.33")]
     fn create_multi_output_derivation_json() -> String {
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         format!(
             r#"{{
@@ -716,7 +717,9 @@ mod tests {
 
         // Verify outputs are complete (BTreeMap guarantees ordering)
         let output_names: Vec<&String> = outputs.keys().collect();
-        let expected_order = vec!["outa", "outb", "outc", "outd", "oute", "outf", "outg", "outh", "outi", "outj"];
+        let expected_order = vec![
+            "outa", "outb", "outc", "outd", "oute", "outf", "outg", "outh", "outi", "outj",
+        ];
         assert_eq!(output_names, expected_order);
 
         drop(store);
@@ -726,6 +729,8 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_invalid_system() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
         // Create a derivation with an invalid system
@@ -762,8 +767,12 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail with invalid system"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => {
+                panic!("expected an error of type Error::Nix, but received {e:?}")
+            }
         };
+
         assert!(
             err.contains("required system or feature not available"),
             "Error should mention system not available, got: {}",
@@ -777,11 +786,12 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_builder_fails() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         // Create a derivation where the builder exits with error
         let drv_json = format!(
@@ -816,7 +826,8 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail when builder exits with error"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         };
         assert!(
             err.contains("builder failed with exit code 1"),
@@ -831,11 +842,12 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_builder_no_output() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
-        let system = current_system().unwrap_or_else(|_| {
-            format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
-        });
+        let system = current_system()
+            .unwrap_or_else(|_| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
 
         // Create a derivation where the builder succeeds but produces no output
         let drv_json = format!(
@@ -870,8 +882,10 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail when builder produces no output"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         };
+
         assert!(
             err.contains("failed to produce output path"),
             "Error should mention failed to produce output, got: {}",
@@ -899,11 +913,17 @@ mod tests {
         let closure = store.get_fs_closure(&drv_path, false, true, false).unwrap();
 
         // The closure should contain at least the derivation and its output
-        assert!(closure.len() >= 2, "Closure should contain at least drv and output");
+        assert!(
+            closure.len() >= 2,
+            "Closure should contain at least drv and output"
+        );
 
         // Verify the output path is in the closure
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(out_in_closure, "Output path should be in closure when include_outputs=true");
+        assert!(
+            out_in_closure,
+            "Output path should be in closure when include_outputs=true"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -923,11 +943,16 @@ mod tests {
         let out_path_name = out_path.name().unwrap();
 
         // Get closure with include_outputs=false
-        let closure = store.get_fs_closure(&drv_path, false, false, false).unwrap();
+        let closure = store
+            .get_fs_closure(&drv_path, false, false, false)
+            .unwrap();
 
         // Verify the output path is NOT in the closure
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(!out_in_closure, "Output path should not be in closure when include_outputs=false");
+        assert!(
+            !out_in_closure,
+            "Output path should not be in closure when include_outputs=false"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -951,7 +976,10 @@ mod tests {
 
         // Verify the output path is NOT in the closure when direction is flipped
         let out_in_closure = closure.iter().any(|p| p.name().unwrap() == out_path_name);
-        assert!(!out_in_closure, "Output path should not be in closure when flip_direction=true");
+        assert!(
+            !out_in_closure,
+            "Output path should not be in closure when flip_direction=true"
+        );
 
         drop(store);
         drop(temp_dir);
@@ -975,7 +1003,10 @@ mod tests {
 
         // Verify the derivation path is in the closure
         let drv_in_closure = closure.iter().any(|p| p.name().unwrap() == drv_path_name);
-        assert!(drv_in_closure, "Derivation should be in closure when include_derivers=true");
+        assert!(
+            drv_in_closure,
+            "Derivation should be in closure when include_derivers=true"
+        );
 
         drop(store);
         drop(temp_dir);

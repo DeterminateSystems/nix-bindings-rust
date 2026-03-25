@@ -1,6 +1,6 @@
-use anyhow::{Context as _, Result};
 use nix_bindings_bindgen_raw as raw;
 use nix_bindings_util::context::{self, Context};
+use nix_bindings_util::{Error, Result};
 use std::ptr::NonNull;
 
 pub struct FetchersSettings {
@@ -18,7 +18,7 @@ impl FetchersSettings {
         let mut ctx = Context::new();
         let ptr = unsafe { context::check_call!(raw::fetchers_settings_new(&mut ctx))? };
         Ok(FetchersSettings {
-            ptr: NonNull::new(ptr).context("fetchers_settings_new unexpectedly returned null")?,
+            ptr: NonNull::new(ptr).ok_or(Error::UnexpectedNullPointer("fetchers_settings_new"))?,
         })
     }
 
