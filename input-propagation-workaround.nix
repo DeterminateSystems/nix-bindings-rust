@@ -130,7 +130,8 @@
           ++ cfg.crateInputMapping."nix-bindings-bdwgc-sys";
           # High-level crates reference their -sys counterparts
           "nix-bindings-bdwgc" = cfg.crateInputMapping."nix-bindings-bdwgc-sys";
-          "nix-bindings-util" = cfg.crateInputMapping."nix-bindings-util-sys";
+          "nix-bindings-util" =
+            cfg.crateInputMapping."nix-bindings-util-sys" ++ cfg.crateInputMapping."nix-bindings-bdwgc-sys";
           "nix-bindings-store" = cfg.crateInputMapping."nix-bindings-store-sys";
           "nix-bindings-expr" = cfg.crateInputMapping."nix-bindings-expr-sys";
           "nix-bindings-fetchers" = cfg.crateInputMapping."nix-bindings-fetchers-sys";

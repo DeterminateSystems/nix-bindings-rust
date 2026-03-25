@@ -1,10 +1,10 @@
-use anyhow::{bail, Error, Result};
 use nix_bindings_store_sys as raw;
+use nix_bindings_util::check_call;
 use nix_bindings_util::context::Context;
 use nix_bindings_util::string_return::{
     callback_get_result_string, callback_get_result_string_data,
 };
-use nix_bindings_util::{check_call, result_string_init};
+use nix_bindings_util::{Error, Result};
 use nix_bindings_util_sys as raw_util;
 #[cfg(nix_at_least = "2.31")]
 use std::collections::BTreeMap;
@@ -161,9 +161,7 @@ impl Store {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect::<Vec<(String, String)>>();
         let params2 = params.clone();
-        let mut store_cache = STORE_CACHE
-            .lock()
-            .map_err(|_| Error::msg("Failed to lock store cache. This should never happen."))?;
+        let mut store_cache = STORE_CACHE.lock().map_err(|_| Error::StoreCacheLock)?;
         match store_cache.entry((url.map(Into::into), params)) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 if let Some(store) = e.get().upgrade() {
@@ -196,7 +194,7 @@ impl Store {
             Ok(_) => {}
             Err(e) => {
                 // Couldn't just clone the error, so we have to print it here.
-                bail!("nix_libstore_init error: {}", e);
+                return Err(Error::LibstoreInit(e));
             }
         }
 
@@ -252,7 +250,7 @@ impl Store {
 
     #[doc(alias = "nix_store_get_uri")]
     pub fn get_uri(&mut self) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_get_uri(
                 &mut self.context,
@@ -267,7 +265,7 @@ impl Store {
     #[cfg(nix_at_least = "2.26")]
     #[doc(alias = "nix_store_get_storedir")]
     pub fn get_storedir(&mut self) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_get_storedir(
                 &mut self.context,
@@ -281,7 +279,7 @@ impl Store {
 
     #[doc(alias = "nix_store_get_version")]
     pub fn get_version(&mut self) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_get_version(
                 &mut self.context,
@@ -310,7 +308,7 @@ impl Store {
 
     #[doc(alias = "nix_store_real_path")]
     pub fn real_path(&mut self, path: &StorePath) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_real_path(
                 &mut self.context,
@@ -347,8 +345,7 @@ impl Store {
                 self.inner.ptr(),
                 json_cstr.as_ptr()
             ))?;
-            let inner = NonNull::new(drv)
-                .ok_or_else(|| Error::msg("derivation_from_json returned null"))?;
+            let inner = NonNull::new(drv).ok_or(Error::NullDerivation("derivation_from_json"))?;
             Ok(Derivation::new_raw(inner))
         }
     }
@@ -374,8 +371,7 @@ impl Store {
                 self.inner.ptr(),
                 drv.inner.as_ptr()
             ))?;
-            let path =
-                NonNull::new(path).ok_or_else(|| Error::msg("add_derivation returned null"))?;
+            let path = NonNull::new(path).ok_or(Error::NullDerivation("add_derivation"))?;
             Ok(StorePath::new_raw(path))
         }
     }
@@ -541,7 +537,7 @@ impl Store {
 
     #[doc(alias = "nix_store_drv_from_path")]
     pub fn drv_from_path(&mut self, path: &StorePath) -> Result<Derivation> {
-        let mut r = Err(anyhow::anyhow!("Derivation was not set by Nix C API"));
+        let mut r = Err(Error::DerivationInit);
         unsafe {
             check_call!(raw::store_drv_from_path(
                 &mut self.context,
@@ -556,7 +552,7 @@ impl Store {
 
     #[doc(alias = "nix_store_query_path_info")]
     pub fn query_path_info(&mut self, path: &StorePath) -> Result<String> {
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             check_call!(raw::store_query_path_info(
                 &mut self.context,
@@ -588,6 +584,7 @@ impl Clone for Store {
 #[cfg(test)]
 mod tests {
     use ctor::ctor;
+    use nix_bindings_util::NixError;
     use std::collections::HashMap;
 
     use super::*;
@@ -673,10 +670,11 @@ mod tests {
         let store_path_string = "bash-interactive-5.2p26".to_string();
         let r = store.parse_store_path(store_path_string.as_str());
         match r {
-            Err(e) => {
+            Err(Error::Nix(NixError::Nix(e))) => {
                 assert!(e.to_string().contains("bash-interactive-5.2p26"));
             }
-            _ => panic!("Expected error"),
+            Ok(_) => panic!("Expected error"),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         }
     }
 
@@ -918,6 +916,8 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_invalid_system() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
         // Create a derivation with an invalid system
@@ -953,8 +953,12 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail with invalid system"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => {
+                panic!("expected an error of type Error::Nix, but received {e:?}")
+            }
         };
+
         assert!(
             err.contains("required system or feature not available"),
             "Error should mention system not available, got: {}",
@@ -968,6 +972,8 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_builder_fails() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
         let system = current_system()
@@ -1005,7 +1011,8 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail when builder exits with error"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         };
         assert!(
             err.contains("builder failed with exit code 1"),
@@ -1020,6 +1027,8 @@ mod tests {
     #[test]
     #[cfg(nix_at_least = "2.33")]
     fn realise_builder_no_output() {
+        use nix_bindings_util::NixError;
+
         let (mut store, temp_dir) = create_temp_store();
 
         let system = current_system()
@@ -1057,8 +1066,10 @@ mod tests {
         let result = store.realise(&drv_path);
         let err = match result {
             Ok(_) => panic!("Build should fail when builder produces no output"),
-            Err(e) => e.to_string(),
+            Err(Error::Nix(NixError::Nix(e))) => e.to_string(),
+            Err(e) => panic!("expected an error of type Error::Nix, but received {e:?}"),
         };
+
         assert!(
             err.contains("failed to produce output path"),
             "Error should mention failed to produce output, got: {}",

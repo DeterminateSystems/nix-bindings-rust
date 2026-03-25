@@ -5,8 +5,8 @@ use nix_bindings_store_sys as raw;
 use nix_bindings_util::{
     check_call,
     context::Context,
-    result_string_init,
     string_return::{callback_get_result_string, callback_get_result_string_data},
+    Error, Result,
 };
 use std::ptr::NonNull;
 
@@ -29,11 +29,11 @@ impl Derivation {
     /// The JSON format follows the [Nix derivation JSON schema](https://nix.dev/manual/nix/latest/protocols/json/derivation.html).
     /// Note that this format is experimental as of writing.
     #[cfg(nix_at_least = "2.31")]
-    pub fn to_json_string(&self) -> anyhow::Result<String> {
+    pub fn to_json_string(&self) -> Result<String> {
         let mut ctx = Context::new();
 
         unsafe {
-            let mut r = result_string_init!();
+            let mut r = Err(Error::StringInit);
             check_call!(raw::derivation_to_json(
                 &mut ctx,
                 self.inner.as_ptr(),

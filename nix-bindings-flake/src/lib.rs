@@ -1,14 +1,13 @@
 use std::{ffi::CString, os::raw::c_char, ptr::NonNull};
 
-use anyhow::{Context as _, Result};
 use nix_bindings_expr::eval_state::EvalState;
 use nix_bindings_fetchers::FetchersSettings;
 use nix_bindings_flake_sys as raw;
 use nix_bindings_util::{
     context::{self, Context},
-    result_string_init,
     string_return::{callback_get_result_string, callback_get_result_string_data},
 };
+use nix_bindings_util::{Error, Result};
 
 /// Store settings for the flakes feature.
 pub struct FlakeSettings {
@@ -78,8 +77,9 @@ impl FlakeReferenceParseFlags {
         let ptr = unsafe {
             context::check_call!(raw::flake_reference_parse_flags_new(&mut ctx, settings.ptr))
         }?;
-        let ptr = NonNull::new(ptr)
-            .context("flake_reference_parse_flags_new unexpectedly returned null")?;
+        let ptr = NonNull::new(ptr).ok_or(Error::UnexpectedNullPointer(
+            "flake_reference_parse_flags_new",
+        ))?;
         Ok(FlakeReferenceParseFlags { ptr })
     }
     /// Sets the [base directory](https://nix.dev/manual/nix/latest/glossary#gloss-base-directory)
@@ -120,7 +120,7 @@ impl FlakeReference {
         reference: &str,
     ) -> Result<(FlakeReference, String)> {
         let mut ctx = Context::new();
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         let mut ptr: *mut raw::flake_reference = std::ptr::null_mut();
         unsafe {
             context::check_call!(raw::flake_reference_and_fragment_from_string(
@@ -136,8 +136,9 @@ impl FlakeReference {
                 callback_get_result_string_data(&mut r)
             ))
         }?;
-        let ptr = NonNull::new(ptr)
-            .context("flake_reference_and_fragment_from_string unexpectedly returned null")?;
+        let ptr = NonNull::new(ptr).ok_or(Error::UnexpectedNullPointer(
+            "flake_reference_and_fragment_from_string",
+        ))?;
         Ok((FlakeReference { ptr }, r?))
     }
 }
@@ -194,9 +195,7 @@ impl FlakeLockFlags {
             context::check_call!(raw::flake_lock_flags_add_input_override(
                 &mut ctx,
                 self.ptr,
-                CString::new(override_path)
-                    .context("Failed to create CString for override_path")?
-                    .as_ptr(),
+                CString::new(override_path)?.as_ptr(),
                 override_ref.ptr.as_ptr()
             ))
         }?;
@@ -233,7 +232,7 @@ impl LockedFlake {
                 flake_ref.ptr.as_ptr()
             ))
         }?;
-        let ptr = NonNull::new(ptr).context("flake_lock unexpectedly returned null")?;
+        let ptr = NonNull::new(ptr).ok_or(Error::UnexpectedNullPointer("flake_lock"))?;
         Ok(LockedFlake { ptr })
     }
 
@@ -258,14 +257,12 @@ impl LockedFlake {
     /// Reads a file out of the Flake
     pub fn read_path(&self, path: &str) -> Result<String> {
         let mut ctx = Context::new();
-        let mut r = result_string_init!();
+        let mut r = Err(Error::StringInit);
         unsafe {
             context::check_call!(raw::locked_flake_read_path(
                 &mut ctx,
                 self.ptr.as_ptr(),
-                CString::new(path)
-                    .context("Failed to create CString for path")?
-                    .as_ptr(),
+                CString::new(path)?.as_ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
             ))
