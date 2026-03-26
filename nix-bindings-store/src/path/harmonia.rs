@@ -1,32 +1,36 @@
-use anyhow::{Context as _, Result};
+use thiserror::Error;
 
 use super::{StorePath, STORE_PATH_HASH_SIZE};
 
-impl TryFrom<&harmonia_store_core::store_path::StorePath> for StorePath {
-    type Error = anyhow::Error;
+#[derive(Error, Debug)]
+pub enum HarmoniaError {
+    #[error(transparent)]
+    NixBindings(#[from] nix_bindings_util::Error),
+    #[error(transparent)]
+    StorePathName(#[from] harmonia_store_core::store_path::StorePathNameError),
+}
 
-    fn try_from(harmonia_path: &harmonia_store_core::store_path::StorePath) -> Result<Self> {
+impl TryFrom<&harmonia_store_core::store_path::StorePath> for StorePath {
+    type Error = HarmoniaError;
+
+    fn try_from(
+        harmonia_path: &harmonia_store_core::store_path::StorePath,
+    ) -> Result<Self, HarmoniaError> {
         let hash: &[u8; STORE_PATH_HASH_SIZE] = harmonia_path.hash().as_ref();
-        StorePath::from_parts(hash, harmonia_path.name().as_ref())
+        Ok(StorePath::from_parts(hash, harmonia_path.name().as_ref())?)
     }
 }
 
 impl TryFrom<&StorePath> for harmonia_store_core::store_path::StorePath {
-    type Error = anyhow::Error;
+    type Error = HarmoniaError;
 
-    fn try_from(nix_path: &StorePath) -> Result<Self> {
-        let hash = nix_path
-            .hash()
-            .context("Failed to get hash from nix StorePath")?;
+    fn try_from(nix_path: &StorePath) -> Result<Self, HarmoniaError> {
+        let hash = nix_path.hash()?;
         let harmonia_hash = harmonia_store_core::store_path::StorePathHash::new(hash);
 
-        let name = nix_path
-            .name()
-            .context("Failed to get name from nix StorePath")?;
+        let name = nix_path.name()?;
 
-        let harmonia_name: harmonia_store_core::store_path::StorePathName = name
-            .parse()
-            .context("Failed to parse name as StorePathName")?;
+        let harmonia_name: harmonia_store_core::store_path::StorePathName = name.parse()?;
 
         Ok(harmonia_store_core::store_path::StorePath::from((
             harmonia_hash,

@@ -12,10 +12,10 @@ readme = "README.md"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
 nix-bindings-store = { path = "../nix-bindings-store", version = "0.2.1" }
 nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.1" }
 nix-bindings-fetchers-sys = { path = "../nix-bindings-fetchers-sys", version = "0.2.1" }
+thiserror.workspace = true
 ctor = "0.2"
 tempfile = "3.10"
 cstr = "0.2"

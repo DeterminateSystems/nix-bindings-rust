@@ -1,9 +1,9 @@
-use crate::eval_state::EvalState;
+use crate::eval_state::{EvalState, EvalStateError};
 use crate::value::Value;
-use anyhow::Result;
 use nix_bindings_expr_sys as raw;
 use nix_bindings_util::check_call;
 use nix_bindings_util_sys as raw_util;
+use std::error::Error;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::ptr::{null, null_mut};
 
@@ -39,8 +39,8 @@ impl<'a> PrimOp<'a> {
     pub fn new<const N: usize>(
         eval_state: &'a mut EvalState,
         meta: PrimOpMeta<N>,
-        f: Box<dyn Fn(&mut EvalState, &[Value; N]) -> Result<Value>>,
-    ) -> Result<PrimOp<'a>> {
+        f: Box<dyn Fn(&mut EvalState, &[Value; N]) -> Result<Value, Box<dyn Error>>>,
+    ) -> Result<PrimOp<'a>, EvalStateError> {
         assert!(N != 0);
 
         let mut args = Vec::new();
@@ -87,7 +87,7 @@ impl<'a> PrimOp<'a> {
     #[doc(alias = "make_primop")]
     #[doc(alias = "create_function")]
     #[doc(alias = "builtin")]
-    pub fn new_value(mut self) -> Result<Value> {
+    pub fn new_value(mut self) -> Result<Value, EvalStateError> {
         self.with_state_and_ptr(|ptr, this| {
             let value = this.new_value_uninitialized()?;
             unsafe {
@@ -108,7 +108,7 @@ impl<'a> PrimOp<'a> {
 /// The user_data for our Nix primops
 struct PrimOpContext<'a> {
     arity: usize,
-    function: Box<dyn Fn(&mut EvalState, &[Value]) -> Result<Value>>,
+    function: Box<dyn Fn(&mut EvalState, &[Value]) -> Result<Value, Box<dyn Error>>>,
     eval_state: &'a mut EvalState,
 }
 

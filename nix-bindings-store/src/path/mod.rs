@@ -1,14 +1,12 @@
 use std::ptr::NonNull;
 
 #[cfg(nix_at_least = "2.33")]
-use anyhow::Context as _;
-use anyhow::Result;
 use nix_bindings_store_sys as raw;
 #[cfg(nix_at_least = "2.33")]
 use nix_bindings_util::{check_call, context::Context};
 use nix_bindings_util::{
-    result_string_init,
     string_return::{callback_get_result_string, callback_get_result_string_data},
+    Error, Result,
 };
 use std::os::raw::c_char;
 
@@ -28,7 +26,7 @@ impl StorePath {
     /// For a store path like `/nix/store/abc1234...-foo-1.2`, this function will return `foo-1.2`.
     pub fn name(&self) -> Result<String> {
         unsafe {
-            let mut r = result_string_init!();
+            let mut r = Err(Error::StringInit);
             raw::store_path_name(
                 self.as_ptr(),
                 Some(callback_get_result_string),
@@ -72,7 +70,7 @@ impl StorePath {
 
         NonNull::new(out_path)
             .map(|ptr| unsafe { Self::new_raw(ptr) })
-            .context("store_create_from_parts returned null")
+            .ok_or(Error::UnexpectedNullPointer("store_create_from_parts"))
     }
 
     /// This is a low level function that you shouldn't have to call unless you are developing the Nix bindings.

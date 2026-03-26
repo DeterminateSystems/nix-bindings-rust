@@ -22,3 +22,6 @@ dead-code = "allow"
 type-complexity = "allow"
 # We're still trying to make Nix more thread-safe, want forward-compat
 arc-with-non-send-sync = "allow"
+
+[workspace.dependencies]
+thiserror = "2.0.18"
