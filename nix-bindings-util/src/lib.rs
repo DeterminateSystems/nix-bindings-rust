@@ -115,7 +115,7 @@ pub enum NixError {
     /// An generic Nix error.
     ///
     /// See [`err_NIX_ERR_NIX_ERROR`](raw::err_NIX_ERR_NIX_ERROR) for more info.
-    #[error("a generic Nix error occurred: {0}")]
+    #[error("{0}")]
     Nix(String),
     /// An unknown error code that is not (yet) handled by this crate.
     #[error("unknown error code {code}: {msg}")]
