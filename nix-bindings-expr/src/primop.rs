@@ -7,34 +7,8 @@ use std::error::Error;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::ptr::{null, null_mut};
 
-/// A primop error that is not memoized in the thunk that triggered it,
-/// allowing the thunk to be forced again.
-///
-/// Since [Nix 2.34](https://nix.dev/manual/nix/2.34/release-notes/rl-2.34.html#c-api-changes),
-/// primop errors are memoized by default: once a thunk fails, forcing it
-/// again returns the same error. Use `RecoverableError` for errors that
-/// are transient, so the caller can retry.
-///
-/// On Nix < 2.34, all errors are already recoverable, so this type has
-/// no additional effect.
-///
-/// Available since nix-bindings-expr 0.2.1.
-#[derive(Debug)]
-pub struct RecoverableError(String);
-
-impl RecoverableError {
-    pub fn new(msg: impl Into<String>) -> Self {
-        RecoverableError(msg.into())
-    }
-}
-
-impl std::fmt::Display for RecoverableError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl std::error::Error for RecoverableError {}
+#[cfg(nix_at_least = "2.34.0pre")]
+use nix_bindings_util::Error;
 
 /// Metadata for a primop, used with `PrimOp::new`.
 pub struct PrimOpMeta<'a, const N: usize> {
@@ -57,6 +31,7 @@ pub struct PrimOp<'a> {
     ptr: *mut raw::PrimOp,
     eval_state: &'a mut EvalState,
 }
+
 impl Drop for PrimOp<'_> {
     fn drop(&mut self) {
         unsafe {
@@ -183,7 +158,9 @@ unsafe extern "C" fn function_adapter(
 #[cfg_attr(not(nix_at_least = "2.34.0pre"), allow(unused))]
 fn error_code(e: Box<dyn Error>) -> raw_util::err {
     #[cfg(nix_at_least = "2.34.0pre")]
-    if e.downcast_ref::<RecoverableError>().is_some() {
+    if e.downcast_ref::<Error>()
+        .is_some_and(|e| matches!(e, Error::RecoverableError(_)))
+    {
         return raw_util::err_NIX_ERR_RECOVERABLE;
     }
     raw_util::err_NIX_ERR_UNKNOWN

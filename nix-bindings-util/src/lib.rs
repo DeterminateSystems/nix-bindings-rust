@@ -91,6 +91,21 @@ pub enum Error {
     /// A string that needed to be valid UTF-8 was not valid UTF-8.
     #[error(transparent)]
     StringUtf8Error(#[from] FromUtf8Error),
+
+    /// A primop error that is not memoized in the thunk that triggered it,
+    /// allowing the thunk to be forced again.
+    ///
+    /// Since [Nix 2.34](https://nix.dev/manual/nix/2.34/release-notes/rl-2.34.html#c-api-changes),
+    /// primop errors are memoized by default: once a thunk fails, forcing it
+    /// again returns the same error. Use `RecoverableError` for errors that
+    /// are transient, so the caller can retry.
+    ///
+    /// On Nix < 2.34, all errors are already recoverable, so this type has
+    /// no additional effect.
+    ///
+    /// Available since nix-bindings-expr 0.2.1.
+    #[error("{0}")]
+    RecoverableError(String),
 }
 
 /// An error as returned from the Nix API.
