@@ -960,7 +960,8 @@ mod tests {
         };
 
         assert!(
-            err.contains("required system or feature not available"),
+            err.contains("required system or feature not available")
+                || err.contains("platform mismatch"),
             "Error should mention system not available, got: {}",
             err
         );

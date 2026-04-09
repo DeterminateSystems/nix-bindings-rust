@@ -7,6 +7,9 @@ use std::error::Error;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::ptr::{null, null_mut};
 
+#[cfg(nix_at_least = "2.34.0pre")]
+use nix_bindings_util::Error;
+
 /// Metadata for a primop, used with `PrimOp::new`.
 pub struct PrimOpMeta<'a, const N: usize> {
     /// Name of the primop. Note that primops do not have to be registered as
@@ -28,6 +31,7 @@ pub struct PrimOp<'a> {
     ptr: *mut raw::PrimOp,
     eval_state: &'a mut EvalState,
 }
+
 impl Drop for PrimOp<'_> {
     fn drop(&mut self) {
         unsafe {
@@ -35,7 +39,13 @@ impl Drop for PrimOp<'_> {
         }
     }
 }
+
 impl<'a> PrimOp<'a> {
+    /// Create a new primop with the given metadata and implementation.
+    ///
+    /// When `f` returns an `Err`, the error is propagated to the Nix evaluator.
+    /// To return a [recoverable error](RecoverableError), include it in the
+    /// error chain (e.g. `Err(RecoverableError::new("...").into())`).
     pub fn new<const N: usize>(
         eval_state: &'a mut EvalState,
         meta: PrimOpMeta<N>,
@@ -134,13 +144,26 @@ unsafe extern "C" fn function_adapter(
             raw::copy_value(context_out, ret, v.raw_ptr());
         },
         Err(e) => unsafe {
-            let cstr = CString::new(e.to_string()).unwrap_or_else(|_e| {
+            let err_str = e.to_string();
+            let err_code = error_code(e);
+            let cstr = CString::new(err_str).unwrap_or_else(|_e| {
                 CString::new("<rust nix-expr application error message contained null byte>")
                     .unwrap()
             });
-            raw_util::set_err_msg(context_out, raw_util::err_NIX_ERR_UNKNOWN, cstr.as_ptr());
+            raw_util::set_err_msg(context_out, err_code, cstr.as_ptr());
         },
     }
+}
+
+#[cfg_attr(not(nix_at_least = "2.34.0pre"), allow(unused))]
+fn error_code(e: Box<dyn Error>) -> raw_util::err {
+    #[cfg(nix_at_least = "2.34.0pre")]
+    if e.downcast_ref::<Error>()
+        .is_some_and(|e| matches!(e, Error::RecoverableError(_)))
+    {
+        return raw_util::err_NIX_ERR_RECOVERABLE;
+    }
+    raw_util::err_NIX_ERR_UNKNOWN
 }
 
 static FUNCTION_ADAPTER: raw::PrimOpFun = Some(function_adapter);
