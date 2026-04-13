@@ -1,6 +1,14 @@
-use anyhow::Context as _;
+use thiserror::Error;
 
 use super::Derivation;
+
+#[derive(Error, Debug)]
+pub enum HarmoniaError {
+    #[error(transparent)]
+    NixBindings(#[from] nix_bindings_util::Error),
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+}
 
 impl Derivation {
     /// Convert harmonia Derivation to nix-bindings Derivation.
@@ -9,23 +17,20 @@ impl Derivation {
     pub fn from_harmonia(
         store: &mut crate::store::Store,
         harmonia_drv: &harmonia_store_core::derivation::Derivation,
-    ) -> anyhow::Result<Self> {
-        let json = serde_json::to_string(harmonia_drv)
-            .context("Failed to serialize harmonia Derivation to JSON")?;
+    ) -> Result<Self, HarmoniaError> {
+        let json = serde_json::to_string(harmonia_drv)?;
 
-        store.derivation_from_json(&json)
+        Ok(store.derivation_from_json(&json)?)
     }
 }
 
 impl TryFrom<&Derivation> for harmonia_store_core::derivation::Derivation {
-    type Error = anyhow::Error;
+    type Error = HarmoniaError;
 
-    fn try_from(nix_drv: &Derivation) -> anyhow::Result<Self> {
-        let json = nix_drv
-            .to_json_string()
-            .context("Failed to convert nix Derivation to JSON")?;
+    fn try_from(nix_drv: &Derivation) -> Result<Self, HarmoniaError> {
+        let json = nix_drv.to_json_string()?;
 
-        serde_json::from_str(&json).context("Failed to parse JSON as harmonia Derivation")
+        Ok(serde_json::from_str(&json)?)
     }
 }
 

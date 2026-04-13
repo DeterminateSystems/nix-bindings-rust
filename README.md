@@ -39,7 +39,7 @@ use nix_bindings_expr::eval_state::{EvalState, init, gc_register_my_thread};
 use nix_bindings_store::store::Store;
 use std::collections::HashMap;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> nix_bindings_util::Result<()> {
     // Initialize Nix library and register thread with GC
     init()?;
     let guard = gc_register_my_thread()?;

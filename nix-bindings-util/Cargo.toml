@@ -12,8 +12,9 @@ readme = "README.md"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
 nix-bindings-util-sys = { path = "../nix-bindings-util-sys", version = "0.2.1" }
+nix-bindings-bdwgc-sys = {path = "../nix-bindings-bdwgc-sys", version = "0.2.1"}
+thiserror.workspace = true
 
 [dev-dependencies]
 ctor = "0.2"

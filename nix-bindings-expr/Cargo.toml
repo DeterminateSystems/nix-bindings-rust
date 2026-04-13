@@ -13,13 +13,13 @@ readme = "README.md"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = "1.0"
 nix-bindings-store = { path = "../nix-bindings-store", version = "0.2.1" }
 nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.1" }
 nix-bindings-bdwgc-sys = { path = "../nix-bindings-bdwgc-sys", version = "0.2.1" }
 nix-bindings-util-sys = { path = "../nix-bindings-util-sys", version = "0.2.1" }
 nix-bindings-store-sys = { path = "../nix-bindings-store-sys", version = "0.2.1" }
 nix-bindings-expr-sys = { path = "../nix-bindings-expr-sys", version = "0.2.1" }
+thiserror.workspace = true
 ctor = "0.2"
 tempfile = "3.10"
 cstr = "0.2"
