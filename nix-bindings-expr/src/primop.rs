@@ -9,7 +9,7 @@ use std::ffi::{c_int, c_void, CStr, CString};
 use std::ptr::{null, null_mut};
 
 #[cfg(nix_at_least = "2.34.0pre")]
-use nix_bindings_util::Error;
+use nix_bindings_util::Error as NixError;
 
 /// Metadata for a primop, used with `PrimOp::new`.
 pub struct PrimOpMeta<'a, const N: usize> {
@@ -161,8 +161,8 @@ unsafe extern "C" fn function_adapter(
 #[cfg_attr(not(nix_at_least = "2.34.0pre"), allow(unused))]
 fn error_code(e: Box<dyn Error>) -> raw_util::err {
     #[cfg(nix_at_least = "2.34.0pre")]
-    if e.downcast_ref::<Error>()
-        .is_some_and(|e| matches!(e, Error::RecoverableError(_)))
+    if e.downcast_ref::<NixError>()
+        .is_some_and(|e| matches!(e, NixError::RecoverableError(_)))
     {
         return raw_util::err_NIX_ERR_RECOVERABLE;
     }

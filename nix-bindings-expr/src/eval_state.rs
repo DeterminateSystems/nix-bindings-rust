@@ -2936,9 +2936,11 @@ mod tests {
                         let count = call_count.get();
                         call_count.set(count + 1);
                         if count == 0 {
-                            Err(primop::RecoverableError::new("transient failure").into())
+                            Err(Box::new(NixBindingsError::RecoverableError(String::from(
+                                "transient failure",
+                            ))))
                         } else {
-                            es.new_value_int(42)
+                            Ok(es.new_value_int(42)?)
                         }
                     }),
                 )
@@ -2976,9 +2978,11 @@ mod tests {
                         call_count.set(count + 1);
                         if count == 0 {
                             // Wrap RecoverableError in .context(), pushing it down the chain
-                            Err(primop::RecoverableError::new("transient failure").into())
+                            Err(Box::new(NixBindingsError::RecoverableError(String::from(
+                                "transient failure",
+                            ))))
                         } else {
-                            es.new_value_int(42)
+                            Ok(es.new_value_int(42)?)
                         }
                     }),
                 )
