@@ -6,6 +6,7 @@ use std::{ffi::NulError, str::Utf8Error, string::FromUtf8Error};
 use thiserror::Error;
 
 pub mod context;
+pub mod logger;
 pub mod settings;
 #[macro_use]
 pub mod string_return;
