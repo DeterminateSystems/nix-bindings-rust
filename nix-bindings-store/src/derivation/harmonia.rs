@@ -69,6 +69,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "https://github.com/nixops4/nix-bindings-rust/issues/64"]
     fn derivation_round_trip_harmonia() {
         let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
         let harmonia_drv = create_harmonia_derivation();
@@ -84,6 +85,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "https://github.com/nixops4/nix-bindings-rust/issues/64"]
     fn derivation_clone() {
         let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
         let harmonia_drv = create_harmonia_derivation();
