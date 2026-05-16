@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-bdwgc-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-expr"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "cstr",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-expr-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "nix-bindings-store-sys",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-fetchers"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "cstr",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-fetchers-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "nix-bindings-util-sys",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-flake"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "cstr",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-flake-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "nix-bindings-bdwgc-sys",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-store"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "ctor",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-store-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "nix-bindings-util-sys",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-util"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "ctor",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "nix-bindings-util-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bindgen",
  "pkg-config",
