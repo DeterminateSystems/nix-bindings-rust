@@ -1,6 +1,6 @@
 [package]
 name = "nix-bindings-store"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 build = "build.rs"
 license = "LGPL-2.1"
@@ -14,9 +14,9 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0"
-nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.1" }
-nix-bindings-util-sys = { path = "../nix-bindings-util-sys", version = "0.2.1" }
-nix-bindings-store-sys = { path = "../nix-bindings-store-sys", version = "0.2.1" }
+nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.2" }
+nix-bindings-util-sys = { path = "../nix-bindings-util-sys", version = "0.2.2" }
+nix-bindings-store-sys = { path = "../nix-bindings-store-sys", version = "0.2.2" }
 zerocopy = "0.8"
 harmonia-store-core = { version = "0.0.0-alpha.0", optional = true }
 serde_json = { version = "1.0", optional = true }
@@ -30,7 +30,7 @@ serde_json = "1.0"
 [build-dependencies]
 pkg-config = "0.3"
 # Needed for version parsing in build.rs
-nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.1" }
+nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.2" }
 
 [features]
 harmonia = [ "dep:harmonia-store-core", "dep:serde_json" ]
