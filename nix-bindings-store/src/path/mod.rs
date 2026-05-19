@@ -20,9 +20,6 @@ pub struct StorePath {
     raw: NonNull<raw::StorePath>,
 }
 
-unsafe impl Send for StorePath {}
-unsafe impl Sync for StorePath {}
-
 impl StorePath {
     /// Get the name of the store path.
     ///

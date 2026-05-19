@@ -83,10 +83,6 @@ impl ValueType {
 pub struct Value {
     inner: NonNull<raw::Value>,
 }
-
-unsafe impl Send for Value {}
-unsafe impl Sync for Value {}
-
 impl Value {
     /// Take ownership of a new [`Value`].
     ///

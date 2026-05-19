@@ -12,8 +12,6 @@ pub struct Context {
     inner: NonNull<raw::c_context>,
 }
 
-unsafe impl Send for Context {}
-
 impl Default for Context {
     fn default() -> Self {
         Self::new()

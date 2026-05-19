@@ -208,9 +208,6 @@ pub struct RealisedString {
 struct EvalStateRef {
     eval_state: NonNull<raw::EvalState>,
 }
-
-unsafe impl Send for EvalStateRef {}
-
 impl EvalStateRef {
     /// Returns a raw pointer to the underlying EvalState.
     ///
@@ -221,7 +218,6 @@ impl EvalStateRef {
         self.eval_state.as_ptr()
     }
 }
-
 impl Drop for EvalStateRef {
     fn drop(&mut self) {
         unsafe {
@@ -351,6 +347,7 @@ impl EvalStateBuilder {
                 }),
             },
             store: self.store.clone(),
+            context,
         })
     }
     /// Returns a raw pointer to the underlying eval state builder.
@@ -368,19 +365,12 @@ impl EvalStateBuilder {
 ///
 /// When an `EvalState` is constructed, it will allocate a number of threads to be used for
 /// evaluating expressions. These threads will remain allocated until the `EvalState` is dropped.
-///
-/// Note: Determinate Nix' EvalState is thread-safe due to parallel eval, which is why it
-/// implements [`Send`] and [`Sync`], and takes in `&self` as opposed to `&mut self` for most of
-/// its methods. Upstream Nix is not (yet) thread-safe.
 #[clippy::has_significant_drop]
 pub struct EvalState {
     eval_state: EvalStateRef,
     store: Store,
+    pub(crate) context: Context,
 }
-
-unsafe impl Send for EvalState {}
-unsafe impl Sync for EvalState {}
-
 impl EvalState {
     /// Creates a new EvalState with basic configuration.
     ///
@@ -431,7 +421,7 @@ impl EvalState {
     #[doc(alias = "parse")]
     #[doc(alias = "eval")]
     #[doc(alias = "evaluate")]
-    pub fn eval_from_string(&self, expr: &str, path: &str) -> Result<Value> {
+    pub fn eval_from_string(&mut self, expr: &str, path: &str) -> Result<Value> {
         let expr_ptr = CString::new(expr).map_err(|e| EvalStateError::NulError {
             arg: "expr",
             err: e,
@@ -440,11 +430,10 @@ impl EvalState {
             arg: "path",
             err: e,
         })?;
-        let mut ctx = Context::new();
         unsafe {
             let value = self.new_value_uninitialized()?;
             check_call!(raw::expr_eval_from_string(
-                &mut ctx,
+                &mut self.context,
                 self.eval_state.as_ptr(),
                 expr_ptr.as_ptr(),
                 path_ptr.as_ptr(),
@@ -463,11 +452,10 @@ impl EvalState {
     /// See also: [Shared Evaluation State](Value#shared-evaluation-state)
     #[doc(alias = "evaluate")]
     #[doc(alias = "strict")]
-    pub fn force(&self, v: &Value) -> Result<()> {
-        let mut ctx = Context::new();
+    pub fn force(&mut self, v: &Value) -> Result<()> {
         unsafe {
             check_call!(raw::value_force(
-                &mut ctx,
+                &mut self.context,
                 self.eval_state.as_ptr(),
                 v.raw_ptr()
             ))
@@ -487,11 +475,11 @@ impl EvalState {
     #[doc(alias = "nix_get_type")]
     #[doc(alias = "get_type")]
     #[doc(alias = "nix_value_type")]
-    #[deprecated(note = "Values will now always be forced; use `EvalState::value_type` instead.")]
-    pub fn value_type_unforced(&self, value: &Value) -> Option<ValueType> {
-        self.value_type(value).ok()
+    pub fn value_type_unforced(&mut self, value: &Value) -> Option<ValueType> {
+        let r = unsafe { check_call!(raw::get_type(&mut self.context, value.raw_ptr())) };
+        // .unwrap(): no reason for this to fail, as it does not evaluate
+        ValueType::from_raw(r.unwrap())
     }
-
     /// Returns the [type][`ValueType`] of a value, [forcing][`EvalState::force`] [evaluation](https://nix.dev/manual/nix/latest/language/evaluation.html) if necessary.
     ///
     /// Forces evaluation if the value is an unevaluated [thunk](https://nix.dev/manual/nix/latest/language/evaluation.html#laziness).
@@ -504,14 +492,19 @@ impl EvalState {
     #[doc(alias = "nix_get_type")]
     #[doc(alias = "get_type")]
     #[doc(alias = "nix_value_type_strict")]
-    pub fn value_type(&self, value: &Value) -> Result<ValueType> {
-        self.force(value)?;
-
-        let mut ctx = Context::new();
-        let r = unsafe { check_call!(raw::get_type(&mut ctx, value.raw_ptr())) };
-
-        Ok(ValueType::from_raw(r.unwrap())
-            .expect("ValueType must not be a thunk after being forced"))
+    pub fn value_type(&mut self, value: &Value) -> Result<ValueType> {
+        match self.value_type_unforced(value) {
+            Some(a) => Ok(a),
+            None => {
+                self.force(value)?;
+                match self.value_type_unforced(value) {
+                    Some(a) => Ok(a),
+                    None => {
+                        panic!("Nix value must not be thunk after being forced.")
+                    }
+                }
+            }
+        }
     }
     /// Extracts the value from an [integer][`ValueType::Int`] Nix value.
     ///
@@ -542,7 +535,7 @@ impl EvalState {
     #[doc(alias = "number")]
     #[doc(alias = "nix_get_int")]
     #[doc(alias = "get_int")]
-    pub fn require_int(&self, v: &Value) -> Result<Int> {
+    pub fn require_int(&mut self, v: &Value) -> Result<Int> {
         let t = self.value_type(v)?;
         if t != ValueType::Int {
             Err(EvalStateError::UnexpectedValueType {
@@ -550,8 +543,7 @@ impl EvalState {
                 received: t,
             })?
         }
-        let mut ctx = Context::new();
-        unsafe { check_call!(raw::get_int(&mut ctx, v.raw_ptr())) }.map_err(Into::into)
+        unsafe { check_call!(raw::get_int(&mut self.context, v.raw_ptr())) }.map_err(Into::into)
     }
 
     /// Extracts the value from a [boolean][`ValueType::Bool`] Nix value.
@@ -562,7 +554,7 @@ impl EvalState {
     #[doc(alias = "boolean")]
     #[doc(alias = "nix_get_bool")]
     #[doc(alias = "get_bool")]
-    pub fn require_bool(&self, v: &Value) -> Result<bool> {
+    pub fn require_bool(&mut self, v: &Value) -> Result<bool> {
         let t = self.value_type(v)?;
         if t != ValueType::Bool {
             Err(EvalStateError::UnexpectedValueType {
@@ -570,8 +562,7 @@ impl EvalState {
                 received: t,
             })?
         }
-        let mut ctx = Context::new();
-        unsafe { check_call!(raw::get_bool(&mut ctx, v.raw_ptr())) }.map_err(Into::into)
+        unsafe { check_call!(raw::get_bool(&mut self.context, v.raw_ptr())) }.map_err(Into::into)
     }
 
     /// Extracts all elements from a [list][`ValueType::List`] Nix value.
@@ -600,7 +591,7 @@ impl EvalState {
     #[doc(alias = "all")]
     #[doc(alias = "nix_get_list_size")]
     #[doc(alias = "nix_get_list_byidx")]
-    pub fn require_list_strict<C>(&self, value: &Value) -> Result<C>
+    pub fn require_list_strict<C>(&mut self, value: &Value) -> Result<C>
     where
         C: FromIterator<Value>,
     {
@@ -611,14 +602,13 @@ impl EvalState {
                 received: t,
             })?
         }
-        let mut ctx = Context::new();
-        let size = unsafe { check_call!(raw::get_list_size(&mut ctx, value.raw_ptr())) }?;
+        let size = unsafe { check_call!(raw::get_list_size(&mut self.context, value.raw_ptr())) }?;
 
         (0..size)
             .map(|i| {
                 let element_ptr = unsafe {
                     check_call!(raw::get_list_byidx(
-                        &mut ctx,
+                        &mut self.context,
                         value.raw_ptr(),
                         self.eval_state.as_ptr(),
                         i
@@ -637,7 +627,7 @@ impl EvalState {
     #[doc(alias = "keys")]
     #[doc(alias = "attributes")]
     #[doc(alias = "fields")]
-    pub fn require_attrs_names(&self, v: &Value) -> Result<Vec<String>> {
+    pub fn require_attrs_names(&mut self, v: &Value) -> Result<Vec<String>> {
         self.require_attrs_names_unsorted(v).map(|mut v| {
             v.sort();
             v
@@ -649,7 +639,7 @@ impl EvalState {
     /// Only use when it's ok that the keys are returned in an arbitrary order.
     #[doc(alias = "keys_unsorted")]
     #[doc(alias = "attributes_unsorted")]
-    pub fn require_attrs_names_unsorted(&self, v: &Value) -> Result<Vec<String>> {
+    pub fn require_attrs_names_unsorted(&mut self, v: &Value) -> Result<Vec<String>> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
             Err(EvalStateError::UnexpectedValueType {
@@ -657,13 +647,12 @@ impl EvalState {
                 received: t,
             })?
         }
-        let mut ctx = Context::new();
-        let n = unsafe { check_call!(raw::get_attrs_size(&mut ctx, v.raw_ptr())) }?;
+        let n = unsafe { check_call!(raw::get_attrs_size(&mut self.context, v.raw_ptr())) }?;
         let mut attrs = Vec::with_capacity(n as usize);
         for i in 0..n {
             let cstr_ptr: *const c_char = unsafe {
                 check_call!(raw::get_attr_name_byidx(
-                    &mut ctx,
+                    &mut self.context,
                     v.raw_ptr(),
                     self.eval_state.as_ptr(),
                     i as c_uint
@@ -684,7 +673,7 @@ impl EvalState {
     #[doc(alias = "get_attr")]
     #[doc(alias = "attribute")]
     #[doc(alias = "field")]
-    pub fn require_attrs_select(&self, v: &Value, attr_name: &str) -> Result<Value> {
+    pub fn require_attrs_select(&mut self, v: &Value, attr_name: &str) -> Result<Value> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
             Err(EvalStateError::UnexpectedValueType {
@@ -697,10 +686,9 @@ impl EvalState {
             arg: "attrName",
             err: e,
         })?;
-        let mut ctx = Context::new();
         unsafe {
             let v2 = check_call!(raw::get_attr_byname(
-                &mut ctx,
+                &mut self.context,
                 v.raw_ptr(),
                 self.eval_state.as_ptr(),
                 attr_name.as_ptr()
@@ -740,7 +728,11 @@ impl EvalState {
     #[doc(alias = "get_attr_opt")]
     #[doc(alias = "try_get")]
     #[doc(alias = "maybe_get")]
-    pub fn require_attrs_select_opt(&self, v: &Value, attr_name: &str) -> Result<Option<Value>> {
+    pub fn require_attrs_select_opt(
+        &mut self,
+        v: &Value,
+        attr_name: &str,
+    ) -> Result<Option<Value>> {
         let t = self.value_type(v)?;
         if t != ValueType::AttrSet {
             Err(EvalStateError::UnexpectedValueType {
@@ -752,10 +744,9 @@ impl EvalState {
             arg: "attrName",
             err: e,
         })?;
-        let mut ctx = Context::new();
         let v2 = unsafe {
             check_call_opt_key!(raw::get_attr_byname(
-                &mut ctx,
+                &mut self.context,
                 v.raw_ptr(),
                 self.eval_state.as_ptr(),
                 attr_name.as_ptr()
@@ -774,7 +765,7 @@ impl EvalState {
     #[doc(alias = "len")]
     #[doc(alias = "nix_get_list_size")]
     #[doc(alias = "get_list_size")]
-    pub fn require_list_size(&self, v: &Value) -> Result<u32> {
+    pub fn require_list_size(&mut self, v: &Value) -> Result<u32> {
         let t = self.value_type(v)?;
         if t != ValueType::List {
             Err(EvalStateError::UnexpectedValueType {
@@ -782,8 +773,7 @@ impl EvalState {
                 received: t,
             })?
         }
-        let mut ctx = Context::new();
-        let ret = unsafe { check_call!(raw::get_list_size(&mut ctx, v.raw_ptr())) }?;
+        let ret = unsafe { check_call!(raw::get_list_size(&mut self.context, v.raw_ptr())) }?;
         Ok(ret)
     }
 
@@ -802,7 +792,7 @@ impl EvalState {
     #[doc(alias = "at")]
     #[doc(alias = "nix_get_list_byidx")]
     #[doc(alias = "get_list_byidx")]
-    pub fn require_list_select_idx_strict(&self, v: &Value, idx: u32) -> Result<Option<Value>> {
+    pub fn require_list_select_idx_strict(&mut self, v: &Value, idx: u32) -> Result<Option<Value>> {
         let t = self.value_type(v)?;
         if t != ValueType::List {
             Err(EvalStateError::UnexpectedValueType {
@@ -814,8 +804,7 @@ impl EvalState {
         // TODO: Remove this bounds checking once https://github.com/NixOS/nix/pull/14030
         // is merged, which will add proper bounds checking to the underlying C API.
         // Currently we perform bounds checking in Rust to avoid undefined behavior.
-        let mut ctx = Context::new();
-        let size = unsafe { check_call!(raw::get_list_size(&mut ctx, v.raw_ptr())) }?;
+        let size = unsafe { check_call!(raw::get_list_size(&mut self.context, v.raw_ptr())) }?;
 
         if idx >= size {
             return Ok(None);
@@ -823,7 +812,7 @@ impl EvalState {
 
         let v2 = unsafe {
             check_call_opt_key!(raw::get_list_byidx(
-                &mut ctx,
+                &mut self.context,
                 v.raw_ptr(),
                 self.eval_state.as_ptr(),
                 idx
@@ -838,12 +827,15 @@ impl EvalState {
     #[doc(alias = "make_string")]
     #[doc(alias = "create_string")]
     #[doc(alias = "string_value")]
-    pub fn new_value_str(&self, s: &str) -> Result<Value> {
+    pub fn new_value_str(&mut self, s: &str) -> Result<Value> {
         let s = CString::new(s).map_err(|e| EvalStateError::NulError { arg: "s", err: e })?;
         let v = unsafe {
             let value = self.new_value_uninitialized()?;
-            let mut ctx = Context::new();
-            check_call!(raw::init_string(&mut ctx, value.raw_ptr(), s.as_ptr()))?;
+            check_call!(raw::init_string(
+                &mut self.context,
+                value.raw_ptr(),
+                s.as_ptr()
+            ))?;
             value
         };
         Ok(v)
@@ -854,11 +846,10 @@ impl EvalState {
     #[doc(alias = "create_int")]
     #[doc(alias = "int_value")]
     #[doc(alias = "integer_value")]
-    pub fn new_value_int(&self, i: Int) -> Result<Value> {
+    pub fn new_value_int(&mut self, i: Int) -> Result<Value> {
         let v = unsafe {
             let value = self.new_value_uninitialized()?;
-            let mut ctx = Context::new();
-            check_call!(raw::init_int(&mut ctx, value.raw_ptr(), i))?;
+            check_call!(raw::init_int(&mut self.context, value.raw_ptr(), i))?;
             value
         };
         Ok(v)
@@ -902,12 +893,11 @@ impl EvalState {
     }
 
     /// Not exposed, because the caller must always explicitly handle the context or not accept one at all.
-    fn get_string(&self, value: &Value) -> Result<String> {
+    fn get_string(&mut self, value: &Value) -> Result<String> {
         let mut r = Err(NixBindingsError::StringInit);
-        let mut ctx = Context::new();
         unsafe {
             check_call!(raw::get_string(
-                &mut ctx,
+                &mut self.context,
                 value.raw_ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
@@ -925,7 +915,7 @@ impl EvalState {
     #[doc(alias = "text")]
     #[doc(alias = "nix_get_string")]
     #[doc(alias = "get_string")]
-    pub fn require_string(&self, value: &Value) -> Result<String> {
+    pub fn require_string(&mut self, value: &Value) -> Result<String> {
         let t = self.value_type(value)?;
         if t != ValueType::String {
             Err(EvalStateError::UnexpectedValueType {
@@ -943,7 +933,7 @@ impl EvalState {
     #[doc(alias = "string_with_context")]
     #[doc(alias = "build_string")]
     pub fn realise_string(
-        &self,
+        &mut self,
         value: &Value,
         is_import_from_derivation: bool,
     ) -> Result<RealisedString> {
@@ -955,10 +945,9 @@ impl EvalState {
             })?
         }
 
-        let mut ctx = Context::new();
         let rs = unsafe {
             check_call!(raw::string_realise(
-                &mut ctx,
+                &mut self.context,
                 self.eval_state.as_ptr(),
                 value.raw_ptr(),
                 is_import_from_derivation
@@ -1002,12 +991,11 @@ impl EvalState {
     #[doc(alias = "apply")]
     #[doc(alias = "invoke")]
     #[doc(alias = "execute")]
-    pub fn call(&self, f: Value, a: Value) -> Result<Value> {
+    pub fn call(&mut self, f: Value, a: Value) -> Result<Value> {
         let value = self.new_value_uninitialized()?;
-        let mut ctx = Context::new();
         unsafe {
             check_call!(raw::value_call(
-                &mut ctx,
+                &mut self.context,
                 self.eval_state.as_ptr(),
                 f.raw_ptr(),
                 a.raw_ptr(),
@@ -1060,13 +1048,12 @@ impl EvalState {
     #[doc(alias = "apply_multi")]
     #[doc(alias = "curry")]
     #[doc(alias = "call_with_args")]
-    pub fn call_multi(&self, f: &Value, args: &[Value]) -> Result<Value> {
+    pub fn call_multi(&mut self, f: &Value, args: &[Value]) -> Result<Value> {
         let value = self.new_value_uninitialized()?;
-        let mut ctx = Context::new();
         unsafe {
             let mut args_ptrs = args.iter().map(|a| a.raw_ptr()).collect::<Vec<_>>();
             check_call!(raw::value_call_multi(
-                &mut ctx,
+                &mut self.context,
                 self.eval_state.as_ptr(),
                 f.raw_ptr(),
                 args_ptrs.len(),
@@ -1084,12 +1071,11 @@ impl EvalState {
     #[doc(alias = "lazy_apply")]
     #[doc(alias = "thunk_apply")]
     #[doc(alias = "defer_call")]
-    pub fn new_value_apply(&self, f: &Value, a: &Value) -> Result<Value> {
+    pub fn new_value_apply(&mut self, f: &Value, a: &Value) -> Result<Value> {
         let value = self.new_value_uninitialized()?;
-        let mut ctx = Context::new();
         unsafe {
             check_call!(raw::init_apply(
-                &mut ctx,
+                &mut self.context,
                 value.raw_ptr(),
                 f.raw_ptr(),
                 a.raw_ptr()
@@ -1098,10 +1084,12 @@ impl EvalState {
         Ok(value)
     }
 
-    pub(crate) fn new_value_uninitialized(&self) -> Result<Value> {
-        let mut ctx = Context::new();
+    pub(crate) fn new_value_uninitialized(&mut self) -> Result<Value> {
         unsafe {
-            let value = check_call!(raw::alloc_value(&mut ctx, self.eval_state.as_ptr()))?;
+            let value = check_call!(raw::alloc_value(
+                &mut self.context,
+                self.eval_state.as_ptr()
+            ))?;
             Ok(Value::new(value))
         }
     }
@@ -1164,7 +1152,7 @@ impl EvalState {
     #[doc(alias = "create_attrset")]
     #[doc(alias = "object")]
     #[doc(alias = "record")]
-    pub fn new_value_attrs<I>(&self, attrs: I) -> Result<Value>
+    pub fn new_value_attrs<I>(&mut self, attrs: I) -> Result<Value>
     where
         I: IntoIterator<Item = (String, Value)>,
         I::IntoIter: ExactSizeIterator,
@@ -1172,7 +1160,6 @@ impl EvalState {
         let iter = attrs.into_iter();
         let size = iter.len();
         let bindings_builder = BindingsBuilder::new(self, size)?;
-        let mut ctx = Context::new();
         for (name, value) in iter {
             let name = CString::new(name).map_err(|e| EvalStateError::NulError {
                 arg: "name",
@@ -1180,7 +1167,7 @@ impl EvalState {
             })?;
             unsafe {
                 check_call!(raw::bindings_builder_insert(
-                    &mut ctx,
+                    &mut self.context,
                     bindings_builder.ptr,
                     name.as_ptr(),
                     value.raw_ptr()
@@ -1190,7 +1177,7 @@ impl EvalState {
         let value = self.new_value_uninitialized()?;
         unsafe {
             check_call!(raw::make_attrs(
-                &mut ctx,
+                &mut self.context,
                 value.raw_ptr(),
                 bindings_builder.ptr
             ))?;
@@ -1211,11 +1198,10 @@ impl Drop for BindingsBuilder {
     }
 }
 impl BindingsBuilder {
-    fn new(eval_state: &EvalState, capacity: usize) -> Result<Self> {
-        let mut ctx = Context::new();
+    fn new(eval_state: &mut EvalState, capacity: usize) -> Result<Self> {
         let ptr = unsafe {
             check_call!(raw::make_bindings_builder(
-                &mut ctx,
+                &mut eval_state.context,
                 eval_state.eval_state.as_ptr(),
                 capacity
             ))
@@ -1367,10 +1353,10 @@ mod tests {
         writeln!(test_file0, "{integer0}").unwrap();
         writeln!(test_file1, "{integer1}").unwrap();
         gc_registering_current_thread(|| {
-            let es = EvalState::new(Store::open(None, HashMap::new()).unwrap(), []).unwrap();
+            let mut es = EvalState::new(Store::open(None, HashMap::new()).unwrap(), []).unwrap();
             assert!(es.eval_from_string(import_expression, "<test>").is_err());
 
-            let es = EvalState::new(
+            let mut es = EvalState::new(
                 Store::open(None, HashMap::new()).unwrap(),
                 [
                     format!("test_file0={}", test_file0.path().to_str().unwrap()).as_str(),
@@ -1391,14 +1377,14 @@ mod tests {
     fn eval_state_eval_from_string() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("1", "<test>").unwrap();
             let v2 = v.clone();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
-            let t2 = es.value_type(&v2);
-            assert!(matches!(t2, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Int));
+            let t2 = es.value_type_unforced(&v2);
+            assert!(t2 == Some(ValueType::Int));
             gc_now();
         })
         .unwrap();
@@ -1408,11 +1394,11 @@ mod tests {
     fn eval_state_value_bool() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("true", "<test>").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Bool)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Bool));
             let b = es.require_bool(&v).unwrap();
             assert!(b);
 
@@ -1428,7 +1414,7 @@ mod tests {
     fn eval_state_value_int() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("1", "<test>").unwrap();
             es.force(&v).unwrap();
             let t = es.value_type(&v).unwrap();
@@ -1443,13 +1429,12 @@ mod tests {
     fn eval_state_require_int_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
             let v = es.new_value_apply(&f, &a).unwrap();
-            // Note: value_type_unforced now forces evaluation
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t.is_none());
             let i = es.require_int(&v).unwrap();
             assert!(i == 3);
         })
@@ -1460,13 +1445,12 @@ mod tests {
     fn eval_state_require_bool_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("x: !x", "<test>").unwrap();
             let a = es.eval_from_string("true", "<test>").unwrap();
             let v = es.new_value_apply(&f, &a).unwrap();
-            // Note: value_type_unforced now forces evaluation
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Bool)));
+            let t = es.value_type_unforced(&v);
+            assert!(t.is_none());
             let i = es.require_bool(&v).unwrap();
             assert!(!i);
         })
@@ -1474,7 +1458,7 @@ mod tests {
     }
 
     /// A helper that turns an expression into a thunk.
-    fn make_thunk(es: &EvalState, expr: &str) -> Value {
+    fn make_thunk(es: &mut EvalState, expr: &str) -> Value {
         // This would be silly in real code, but it works for the current Nix implementation.
         // A Nix implementation that applies the identity function eagerly would be a valid
         // Nix implementation, but annoying because we'll have to change this helper to do
@@ -1488,11 +1472,10 @@ mod tests {
     fn make_thunk_helper_works() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
-            let v = make_thunk(&es, "1");
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
-            let t = es.value_type(&v);
-            assert!(t.is_ok());
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = make_thunk(&mut es, "1");
+            let t = es.value_type_unforced(&v);
+            assert!(t.is_none());
         })
         .unwrap();
     }
@@ -1501,11 +1484,11 @@ mod tests {
     fn eval_state_value_attrs_names_empty() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("{ }", "<test>").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::AttrSet)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::AttrSet));
             let attrs = es.require_attrs_names_unsorted(&v).unwrap();
             assert_eq!(attrs.len(), 0);
         })
@@ -1516,11 +1499,10 @@ mod tests {
     fn eval_state_require_attrs_names_unsorted_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
-            let v = make_thunk(&es, "{ a = 1; b = 2; }");
-            // Note: value_type_unforced now forces evaluation
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::AttrSet)));
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = make_thunk(&mut es, "{ a = 1; b = 2; }");
+            let t = es.value_type_unforced(&v);
+            assert!(t.is_none());
             let attrs = es.require_attrs_names_unsorted(&v).unwrap();
             assert_eq!(attrs.len(), 2);
         })
@@ -1531,7 +1513,7 @@ mod tests {
     fn eval_state_require_attrs_names_unsorted_bad_type() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("1", "<test>").unwrap();
             es.force(&v).unwrap();
             let r = es.require_attrs_names_unsorted(&v);
@@ -1550,7 +1532,7 @@ mod tests {
     fn eval_state_value_attrs_names_example() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = throw "nope a"; b = throw "nope b"; }"#;
             let v = es.eval_from_string(expr, "<test>").unwrap();
             let attrs = es.require_attrs_names(&v).unwrap();
@@ -1565,7 +1547,7 @@ mod tests {
     fn eval_state_require_attrs_select() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = "aye"; b = "bee"; }"#;
             let v = es.eval_from_string(expr, "<test>").unwrap();
             let a = es.require_attrs_select(&v, "a").unwrap();
@@ -1582,10 +1564,10 @@ mod tests {
     fn eval_state_require_attrs_select_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = "aye"; b = "bee"; }"#;
-            let v = make_thunk(&es, expr);
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            let v = make_thunk(&mut es, expr);
+            assert!(es.value_type_unforced(&v).is_none());
             let r = es.require_attrs_select(&v, "a");
             assert!(r.is_ok());
         })
@@ -1596,7 +1578,7 @@ mod tests {
     fn eval_state_require_attrs_select_error() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = throw "oh no the error"; }"#;
             let v = es.eval_from_string(expr, "<test>").unwrap();
             let r = es.require_attrs_select(&v, "a");
@@ -1620,7 +1602,7 @@ mod tests {
     fn eval_state_require_attrs_select_opt() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = "aye"; b = "bee"; }"#;
             let v = es.eval_from_string(expr, "<test>").unwrap();
             let a = es.require_attrs_select_opt(&v, "a").unwrap().unwrap();
@@ -1637,10 +1619,10 @@ mod tests {
     fn eval_state_require_attrs_select_opt_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = "aye"; b = "bee"; }"#;
-            let v = make_thunk(&es, expr);
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            let v = make_thunk(&mut es, expr);
+            assert!(es.value_type_unforced(&v).is_none());
             let r = es.require_attrs_select_opt(&v, "a");
             assert!(r.is_ok());
         })
@@ -1651,7 +1633,7 @@ mod tests {
     fn eval_state_require_attrs_select_opt_error() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"{ a = throw "oh no the error"; }"#;
             let v = es.eval_from_string(expr, "<test>").unwrap();
             let r = es.require_attrs_select_opt(&v, "a");
@@ -1674,11 +1656,11 @@ mod tests {
     fn eval_state_value_string() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("\"hello\"", "<test>").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::String)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::String));
             let s = es.require_string(&v).unwrap();
             assert!(s == "hello");
         })
@@ -1689,9 +1671,9 @@ mod tests {
     fn eval_state_value_string_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
-            let v = make_thunk(&es, "\"hello\"");
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = make_thunk(&mut es, "\"hello\"");
+            assert!(es.value_type_unforced(&v).is_none());
             let s = es.require_string(&v).unwrap();
             assert!(s == "hello");
         })
@@ -1702,7 +1684,7 @@ mod tests {
     fn eval_state_value_string_unexpected_bool() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("true", "<test>").unwrap();
             es.force(&v).unwrap();
             let r = es.require_string(&v);
@@ -1720,7 +1702,7 @@ mod tests {
     fn eval_state_value_string_unexpected_path_value() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("/foo", "<test>").unwrap();
             es.force(&v).unwrap();
             let r = es.require_string(&v);
@@ -1737,13 +1719,13 @@ mod tests {
     fn eval_state_value_string_bad_utf() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es
                 .eval_from_string("builtins.substring 0 1 \"ü\"", "<test>")
                 .unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::String)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::String));
             let r = es.require_string(&v);
             assert!(r.is_err());
             assert!(matches!(
@@ -1760,13 +1742,13 @@ mod tests {
     fn eval_state_value_string_unexpected_context() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es
                 .eval_from_string("(derivation { name = \"hello\"; system = \"dummy\"; builder = \"cmd.exe\"; }).outPath", "<test>")
                 .unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::String)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::String));
             // TODO
             // let r = es.require_string_without_context(&v);
             // assert!(r.is_err());
@@ -1779,11 +1761,11 @@ mod tests {
     fn eval_state_new_string() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.new_value_str("hello").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::String)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::String));
             let s = es.require_string(&v).unwrap();
             assert!(s == "hello");
         })
@@ -1794,11 +1776,11 @@ mod tests {
     fn eval_state_new_string_empty() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.new_value_str("").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::String)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::String));
             let s = es.require_string(&v).unwrap();
             assert!(s.is_empty());
         })
@@ -1809,7 +1791,7 @@ mod tests {
     fn eval_state_new_string_invalid() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let r = es.new_value_str("hell\0no");
             match r {
                 Ok(_) => panic!("expected an error"),
@@ -1828,11 +1810,11 @@ mod tests {
     fn eval_state_new_int() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.new_value_int(42).unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Int));
             let i = es.require_int(&v).unwrap();
             assert!(i == 42);
         })
@@ -1843,11 +1825,11 @@ mod tests {
     fn eval_state_value_attrset() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("{ }", "<test>").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::AttrSet)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::AttrSet));
         })
         .unwrap();
     }
@@ -1856,11 +1838,11 @@ mod tests {
     fn eval_state_value_list() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[ ]", "<test>").unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::List)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::List));
         })
         .unwrap();
     }
@@ -1869,7 +1851,7 @@ mod tests {
     fn eval_state_value_list_strict_empty() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[]", "<test>").unwrap();
             es.force(&v).unwrap();
             let list: Vec<Value> = es.require_list_strict(&v).unwrap();
@@ -1882,7 +1864,7 @@ mod tests {
     fn eval_state_value_list_strict_int() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[42]", "<test>").unwrap();
             es.force(&v).unwrap();
             let list: Vec<Value> = es.require_list_strict(&v).unwrap();
@@ -1896,7 +1878,7 @@ mod tests {
     fn eval_state_value_list_strict_int_bool() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[42 true]", "<test>").unwrap();
             es.force(&v).unwrap();
             let list: Vec<Value> = es.require_list_strict(&v).unwrap();
@@ -1911,7 +1893,7 @@ mod tests {
     fn eval_state_value_list_strict_error() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es
                 .eval_from_string(r#"[(throw "_evaluated_item_")]"#, "<test>")
                 .unwrap();
@@ -1940,7 +1922,7 @@ mod tests {
     fn eval_state_value_list_strict_generic_container() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[1 2 3]", "<test>").unwrap();
 
             // Test with Vec
@@ -1963,7 +1945,7 @@ mod tests {
     fn eval_state_realise_string() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let expr = r#"
                 ''
                     a derivation output: ${
@@ -2010,13 +1992,13 @@ mod tests {
     fn eval_state_call() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
             let v = es.call(f, a).unwrap();
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Int));
             let i = es.require_int(&v).unwrap();
             assert!(i == 3);
         })
@@ -2027,14 +2009,14 @@ mod tests {
     fn eval_state_call_multi() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             // This is a function that takes two arguments.
             let f = es.eval_from_string("x: y: x - y", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
             let b = es.eval_from_string("3", "<test>").unwrap();
             let v = es.call_multi(&f, &[a, b]).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Int));
             let i = es.require_int(&v).unwrap();
             assert!(i == -1);
         })
@@ -2045,15 +2027,15 @@ mod tests {
     fn eval_state_apply() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             // This is a function that takes two arguments.
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
             let v = es.new_value_apply(&f, &a).unwrap();
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            assert!(es.value_type_unforced(&v).is_none());
             es.force(&v).unwrap();
-            let t = es.value_type(&v);
-            assert!(matches!(t, Ok(ValueType::Int)));
+            let t = es.value_type_unforced(&v);
+            assert!(t == Some(ValueType::Int));
             let i = es.require_int(&v).unwrap();
             assert!(i == 3);
         })
@@ -2064,7 +2046,7 @@ mod tests {
     fn eval_state_call_fail_body() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("true", "<test>").unwrap();
             let r = es.call(f, a);
@@ -2087,7 +2069,7 @@ mod tests {
     fn eval_state_call_multi_fail_body() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             // This is a function that takes two arguments.
             let f = es.eval_from_string("x: y: x - y", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
@@ -2112,7 +2094,7 @@ mod tests {
     fn eval_state_apply_fail_body() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("true", "<test>").unwrap();
             // Lazy => no error
@@ -2139,7 +2121,7 @@ mod tests {
     fn eval_state_call_fail_args() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("{x}: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("{}", "<test>").unwrap();
             let r = es.call(f, a);
@@ -2162,7 +2144,7 @@ mod tests {
     fn eval_state_call_multi_fail_args() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             // This is a function that takes two arguments.
             let f = es.eval_from_string("{x}: {y}: x - y", "<test>").unwrap();
             let a = es.eval_from_string("{x = 2;}", "<test>").unwrap();
@@ -2188,7 +2170,7 @@ mod tests {
     fn eval_state_apply_fail_args_lazy() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let f = es.eval_from_string("{x}: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("{}", "<test>").unwrap();
             // Lazy => no error
@@ -2220,7 +2202,7 @@ mod tests {
             let log = tempfile::tempdir().unwrap();
             let log_path = log.path().to_str().unwrap();
 
-            let es = EvalState::new(
+            let mut es = EvalState::new(
                 Store::open(
                     Some("local"),
                     HashMap::from([
@@ -2506,7 +2488,7 @@ mod tests {
     pub fn eval_state_new_value_attrs_from_slice_empty() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, []).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let attrs = es.new_value_attrs([]).unwrap();
             let t = es.value_type(&attrs).unwrap();
             assert!(t == ValueType::AttrSet);
@@ -2520,7 +2502,7 @@ mod tests {
     pub fn eval_state_new_value_attrs_from_vec() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, []).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let attrs = {
                 let a = es.new_value_int(1).unwrap();
                 let b = es.new_value_int(2).unwrap();
@@ -2547,7 +2529,7 @@ mod tests {
     pub fn eval_state_new_value_attrs_from_hashmap() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, []).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let attrs = {
                 let a = es.new_value_int(1).unwrap();
                 let b = es.new_value_int(2).unwrap();
@@ -2574,7 +2556,7 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_basic() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[ 10 20 30 ]", "<test>").unwrap();
 
             let elem0 = es.require_list_select_idx_strict(&v, 0).unwrap().unwrap();
@@ -2592,7 +2574,7 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_out_of_bounds() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[ 1 2 3 ]", "<test>").unwrap();
 
             let out_of_bounds = es.require_list_select_idx_strict(&v, 3).unwrap();
@@ -2609,7 +2591,7 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_empty_list() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("[ ]", "<test>").unwrap();
 
             // Test that the safe version properly handles empty list access
@@ -2627,9 +2609,9 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
-            let v = make_thunk(&es, "[ 42 ]");
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = make_thunk(&mut es, "[ 42 ]");
+            assert!(es.value_type_unforced(&v).is_none());
 
             let elem = es.require_list_select_idx_strict(&v, 0).unwrap().unwrap();
             assert_eq!(es.require_int(&elem).unwrap(), 42);
@@ -2641,7 +2623,7 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_error_element() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
 
             let v = es
                 .eval_from_string("[ (1 + 1) (throw \"error\") (3 + 3) ]", "<test>")
@@ -2668,7 +2650,7 @@ mod tests {
     fn eval_state_require_list_select_idx_strict_wrong_type() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("42", "<test>").unwrap();
 
             let r = es.require_list_select_idx_strict(&v, 0);
@@ -2687,7 +2669,7 @@ mod tests {
     fn eval_state_require_list_size_basic() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
 
             let empty = es.eval_from_string("[ ]", "<test>").unwrap();
             assert_eq!(es.require_list_size(&empty).unwrap(), 0);
@@ -2702,9 +2684,9 @@ mod tests {
     fn eval_state_require_list_size_forces_thunk() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
-            let v = make_thunk(&es, "[ 1 2 3 4 5 ]");
-            // Note: value_type_unforced now forces evaluation, so the value is always forced.
+            let mut es = EvalState::new(store, []).unwrap();
+            let v = make_thunk(&mut es, "[ 1 2 3 4 5 ]");
+            assert!(es.value_type_unforced(&v).is_none());
 
             let size = es.require_list_size(&v).unwrap();
             assert_eq!(size, 5);
@@ -2716,7 +2698,7 @@ mod tests {
     fn eval_state_require_list_size_lazy_elements() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
 
             let v = es
                 .eval_from_string(
@@ -2735,7 +2717,7 @@ mod tests {
     fn eval_state_require_list_size_wrong_type() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalState::new(store, []).unwrap();
+            let mut es = EvalState::new(store, []).unwrap();
             let v = es.eval_from_string("\"not a list\"", "<test>").unwrap();
 
             let r = es.require_list_size(&v);
@@ -2777,7 +2759,7 @@ mod tests {
     fn eval_state_builder_path_coercion() {
         gc_registering_current_thread(|| {
             let mut store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalStateBuilder::new(store.clone())
+            let mut es = EvalStateBuilder::new(store.clone())
                 .unwrap()
                 .build()
                 .unwrap();
@@ -2836,7 +2818,7 @@ mod tests {
     fn eval_state_builder_loads_max_call_depth() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalStateBuilder::new(store).unwrap().build().unwrap();
+            let mut es = EvalStateBuilder::new(store).unwrap().build().unwrap();
 
             // Create a recursive function that calls itself 1100 times
             // This should fail because max-call-depth is 1000 (set in setup())
@@ -2885,7 +2867,7 @@ mod tests {
     fn eval_state_builder_ignores_ambient_when_disabled() {
         gc_registering_current_thread(|| {
             let store = Store::open(None, HashMap::new()).unwrap();
-            let es = EvalStateBuilder::new(store)
+            let mut es = EvalStateBuilder::new(store)
                 .unwrap()
                 .load_ambient_settings(false)
                 .build()
