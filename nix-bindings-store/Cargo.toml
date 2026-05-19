@@ -33,7 +33,9 @@ pkg-config = "0.3"
 nix-bindings-util = { path = "../nix-bindings-util", version = "0.2.1" }
 
 [features]
+default = []
 harmonia = [ "dep:harmonia-store-core", "dep:serde_json" ]
+detnix = ["nix-bindings-util/detnix"]
 
 [lints.rust]
 warnings = "deny"

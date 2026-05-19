@@ -13,6 +13,12 @@ use nix_bindings_util::{Error, Result};
 pub struct FlakeSettings {
     pub(crate) ptr: *mut raw::flake_settings,
 }
+
+#[cfg(feature = "detnix")]
+unsafe impl Send for FlakeSettings {}
+#[cfg(feature = "detnix")]
+unsafe impl Sync for FlakeSettings {}
+
 impl Drop for FlakeSettings {
     fn drop(&mut self) {
         unsafe {
@@ -206,6 +212,12 @@ impl FlakeLockFlags {
 pub struct LockedFlake {
     pub(crate) ptr: NonNull<raw::locked_flake>,
 }
+
+#[cfg(feature = "detnix")]
+unsafe impl Send for LockedFlake {}
+#[cfg(feature = "detnix")]
+unsafe impl Sync for LockedFlake {}
+
 impl Drop for LockedFlake {
     fn drop(&mut self) {
         unsafe {
@@ -295,6 +307,16 @@ mod tests {
         init();
         let gc_registration = gc_register_my_thread();
         let store = Store::open(None, []).unwrap();
+
+        #[cfg(feature = "detnix")]
+        let eval_state = EvalStateBuilder::new(store)
+            .unwrap()
+            .flakes(&FlakeSettings::new().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        #[cfg(not(feature = "detnix"))]
         let mut eval_state = EvalStateBuilder::new(store)
             .unwrap()
             .flakes(&FlakeSettings::new().unwrap())

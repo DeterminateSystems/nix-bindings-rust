@@ -20,6 +20,11 @@ pub struct StorePath {
     raw: NonNull<raw::StorePath>,
 }
 
+#[cfg(feature = "detnix")]
+unsafe impl Send for StorePath {}
+#[cfg(feature = "detnix")]
+unsafe impl Sync for StorePath {}
+
 impl StorePath {
     /// Get the name of the store path.
     ///

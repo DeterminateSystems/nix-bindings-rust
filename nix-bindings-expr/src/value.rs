@@ -83,6 +83,13 @@ impl ValueType {
 pub struct Value {
     inner: NonNull<raw::Value>,
 }
+
+#[cfg(feature = "detnix")]
+unsafe impl Send for Value {}
+
+#[cfg(feature = "detnix")]
+unsafe impl Sync for Value {}
+
 impl Value {
     /// Take ownership of a new [`Value`].
     ///

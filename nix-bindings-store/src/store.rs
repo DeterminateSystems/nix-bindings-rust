@@ -58,6 +58,7 @@ impl StoreWeak {
     pub fn upgrade(&self) -> Option<Store> {
         self.inner.upgrade().map(|inner| Store {
             inner,
+            #[cfg(not(feature = "detnix"))]
             context: Context::new(),
         })
     }
@@ -145,6 +146,7 @@ fn callback_make_drv_outputs_data(vec: &mut HashMap<String, String>) -> *mut std
 pub struct Store {
     inner: Arc<StoreRef>,
     /* An error context to reuse. This way we don't have to allocate them for each store operation. */
+    #[cfg(not(feature = "detnix"))]
     context: Context,
 }
 impl Store {
@@ -236,6 +238,7 @@ impl Store {
             inner: Arc::new(StoreRef {
                 inner: NonNull::new(store).unwrap(),
             }),
+            #[cfg(not(feature = "detnix"))]
             context,
         };
         Ok(store)
@@ -251,9 +254,19 @@ impl Store {
     #[doc(alias = "nix_store_get_uri")]
     pub fn get_uri(&mut self) -> Result<String> {
         let mut r = Err(Error::StringInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_get_uri(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
@@ -266,9 +279,19 @@ impl Store {
     #[doc(alias = "nix_store_get_storedir")]
     pub fn get_storedir(&mut self) -> Result<String> {
         let mut r = Err(Error::StringInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_get_storedir(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
@@ -280,9 +303,19 @@ impl Store {
     #[doc(alias = "nix_store_get_version")]
     pub fn get_version(&mut self) -> Result<String> {
         let mut r = Err(Error::StringInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_get_version(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 Some(callback_get_result_string),
                 callback_get_result_string_data(&mut r)
@@ -294,12 +327,19 @@ impl Store {
     #[doc(alias = "nix_store_parse_path")]
     pub fn parse_store_path(&mut self, path: &str) -> Result<StorePath> {
         let path = CString::new(path)?;
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
-            let store_path = check_call!(raw::store_parse_path(
-                &mut self.context,
-                self.inner.ptr(),
-                path.as_ptr()
-            ))?;
+            let store_path =
+                check_call!(raw::store_parse_path(ctx, self.inner.ptr(), path.as_ptr()))?;
             let store_path =
                 NonNull::new(store_path).expect("nix_store_parse_path returned a null pointer");
             Ok(StorePath::new_raw(store_path))
@@ -309,9 +349,19 @@ impl Store {
     #[doc(alias = "nix_store_real_path")]
     pub fn real_path(&mut self, path: &StorePath) -> Result<String> {
         let mut r = Err(Error::StringInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_real_path(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 path.as_ptr(),
                 Some(callback_get_result_string),
@@ -339,9 +389,19 @@ impl Store {
     #[doc(alias = "nix_derivation_from_json")]
     pub fn derivation_from_json(&mut self, json: &str) -> Result<Derivation> {
         let json_cstr = CString::new(json)?;
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             let drv = check_call!(raw::derivation_from_json(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 json_cstr.as_ptr()
             ))?;
@@ -365,9 +425,18 @@ impl Store {
     #[cfg(nix_at_least = "2.31")]
     #[doc(alias = "nix_add_derivation")]
     pub fn add_derivation(&mut self, drv: &Derivation) -> Result<StorePath> {
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             let path = check_call!(raw::add_derivation(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 drv.inner.as_ptr()
             ))?;
@@ -380,9 +449,19 @@ impl Store {
     pub fn make_drv_outputs(&mut self, json: &str) -> Result<HashMap<String, String>> {
         let json = CString::new(json)?;
         let mut r = HashMap::new();
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::derivation_make_outputs(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 json.as_ptr(),
                 Some(callback_make_drv_outputs),
@@ -425,9 +504,18 @@ impl Store {
             .map(|p| unsafe { p.as_ptr() as *const raw::StorePath })
             .collect();
 
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_build_paths(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 paths.as_mut_ptr(),
                 paths.len() as std::os::raw::c_uint,
@@ -479,9 +567,18 @@ impl Store {
             outputs.insert(name, path);
         }
 
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_realise(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 path.as_ptr(),
                 userdata,
@@ -520,9 +617,19 @@ impl Store {
         include_derivers: bool,
     ) -> Result<Vec<StorePath>> {
         let mut r = Vec::new();
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_get_fs_closure(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 store_path.as_ptr(),
                 flip_direction,
@@ -538,9 +645,19 @@ impl Store {
     #[doc(alias = "nix_store_drv_from_path")]
     pub fn drv_from_path(&mut self, path: &StorePath) -> Result<Derivation> {
         let mut r = Err(Error::DerivationInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_drv_from_path(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 path.as_ptr(),
                 Some(callback_get_result_derivation),
@@ -553,9 +670,19 @@ impl Store {
     #[doc(alias = "nix_store_query_path_info")]
     pub fn query_path_info(&mut self, path: &StorePath) -> Result<String> {
         let mut r = Err(Error::StringInit);
+
+        #[cfg(feature = "detnix")]
+        let mut context = Context::new();
+
+        #[cfg(feature = "detnix")]
+        let ctx = &mut context;
+
+        #[cfg(not(feature = "detnix"))]
+        let ctx = &mut self.context;
+
         unsafe {
             check_call!(raw::store_query_path_info(
-                &mut self.context,
+                ctx,
                 self.inner.ptr(),
                 path.as_ptr(),
                 callback_get_result_string_data(&mut r),
@@ -576,6 +703,7 @@ impl Clone for Store {
     fn clone(&self) -> Self {
         Store {
             inner: self.inner.clone(),
+            #[cfg(not(feature = "detnix"))]
             context: Context::new(),
         }
     }
