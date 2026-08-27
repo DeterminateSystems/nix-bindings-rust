@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-16
+
 ### Added
 
+- `StorePath` bindings: hash access and `Display` impl. ([#42] by [@Ericson2314])
+- `Derivation::to_json_string`. ([#47] by [@Ericson2314])
+- Experimental [harmonia](https://github.com/nix-community/harmonia) interop behind the `harmonia` feature flag: conversions for `StorePath` and `Derivation`. ([#43] by [@artemist]; see [issue #64])
 - `primop::RecoverableError` for primop errors that should not be memoized in the thunk, allowing retry on next force. Required by Nix >= 2.34 ([release note](https://nix.dev/manual/nix/2.34/release-notes/rl-2.34.html#c-api-changes)) for recoverable errors to remain recoverable, as Nix 2.34 memoizes errors by default.
+
+### Fixed
+
+- aarch64 support for nix-bindings-util, nix-bindings-expr, and nix-bindings-store. ([#52] by [@RossComputerGuy], [#63] by [@dramforever] and [@roberth])
+- Dev shell and build on Darwin. ([#52] by [@RossComputerGuy])
+- `cargo doc` generation. ([#41])
+
+### Changed
+
+- Replace `lazy_static` with `std::sync::LazyLock`. ([#51] by [@RossComputerGuy])
 
 ## [0.2.0] - 2026-01-13
 
@@ -71,6 +86,8 @@ Thanks to everyone who contributed to the initial development, some of whom may 
 <!-- end of 0.1.0 release section -->
 
 [@aanderse]: https://github.com/aanderse
+[@artemist]: https://github.com/artemist
+[@dramforever]: https://github.com/dramforever
 [@Ericson2314]: https://github.com/Ericson2314
 [@ErinvanderVeen]: https://github.com/ErinvanderVeen
 [@numinit]: https://github.com/numinit
@@ -84,7 +101,16 @@ Thanks to everyone who contributed to the initial development, some of whom may 
 [#26]: https://github.com/nixops4/nix-bindings-rust/pull/26
 [#27]: https://github.com/nixops4/nix-bindings-rust/pull/27
 [#36]: https://github.com/nixops4/nix-bindings-rust/pull/36
-[Unreleased]: https://github.com/nixops4/nix-bindings-rust/compare/0.2.0...HEAD
+[#41]: https://github.com/nixops4/nix-bindings-rust/pull/41
+[#42]: https://github.com/nixops4/nix-bindings-rust/pull/42
+[#43]: https://github.com/nixops4/nix-bindings-rust/pull/43
+[#47]: https://github.com/nixops4/nix-bindings-rust/pull/47
+[#51]: https://github.com/nixops4/nix-bindings-rust/pull/51
+[#52]: https://github.com/nixops4/nix-bindings-rust/pull/52
+[#63]: https://github.com/nixops4/nix-bindings-rust/pull/63
+[issue #64]: https://github.com/nixops4/nix-bindings-rust/issues/64
+[Unreleased]: https://github.com/nixops4/nix-bindings-rust/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/nixops4/nix-bindings-rust/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/nixops4/nix-bindings-rust/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/nixops4/nix-bindings-rust/releases/tag/0.1.0
 [nix#11979]: https://github.com/NixOS/nix/issues/11979
