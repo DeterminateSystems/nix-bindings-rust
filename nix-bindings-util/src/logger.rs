@@ -280,9 +280,10 @@ static VTABLE: raw::logger = raw::logger {
 
 /// Replace Nix's global logger with `logger`.
 ///
-/// `logger` is moved into a heap allocation owned by Nix; it is
-/// dropped when this function is called again (replacing the logger)
-/// or at process shutdown.
+/// `logger` is moved into a heap allocation owned by Nix. Nix leaks
+/// the global logger on purpose, so
+/// the previous logger is not dropped when it is replaced, and
+/// `logger` is not dropped at process shutdown.
 ///
 /// # Thread safety
 ///
@@ -323,8 +324,8 @@ mod tests {
         crate::init().unwrap();
     }
 
-    /// Logger that records when it's dropped, so tests can observe the
-    /// destroy callback firing on replacement.
+    /// Logger that records when it's dropped, so tests can observe
+    /// whether the destroy callback fires.
     struct DropFlag {
         dropped: Arc<AtomicBool>,
         log_count: Arc<AtomicUsize>,
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn set_and_replace_calls_destroy() {
+    fn set_and_replace_does_not_drop_previous() {
         let dropped = Arc::new(AtomicBool::new(false));
         let log_count = Arc::new(AtomicUsize::new(0));
 
@@ -355,7 +356,9 @@ mod tests {
 
         assert!(!dropped.load(Ordering::SeqCst));
 
-        // Replace with a fresh logger; this should drop the previous one.
+        // Replace with a fresh logger. Nix leaks the replaced logger
+        // on purpose (NixOS/nix commit be841693b3), so the destroy
+        // callback must not run.
         set_logger(DropFlag {
             dropped: Arc::new(AtomicBool::new(false)),
             log_count: Arc::new(AtomicUsize::new(0)),
@@ -363,8 +366,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            dropped.load(Ordering::SeqCst),
-            "previous logger should be dropped when the logger is replaced"
+            !dropped.load(Ordering::SeqCst),
+            "Nix leaks the replaced logger, so it must not be dropped"
         );
     }
 
