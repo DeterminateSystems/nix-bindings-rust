@@ -12,6 +12,7 @@ pub struct Context {
     inner: NonNull<raw::c_context>,
 }
 
+#[cfg(feature = "detnix")]
 unsafe impl Send for Context {}
 
 impl Default for Context {
