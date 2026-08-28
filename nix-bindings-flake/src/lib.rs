@@ -472,7 +472,7 @@ mod tests {
             &fetchers_settings,
             &flake_settings,
             &flake_reference_parse_flags,
-            &format!("path:{}", &flake_dir_a_str),
+            &format!("path:{}", flake_dir_a_str),
         )
         .unwrap();
 
@@ -586,7 +586,7 @@ mod tests {
             &fetchers_settings,
             &flake_settings,
             &flake_reference_parse_flags,
-            &format!("path:{}", &flake_dir_c_str),
+            &format!("path:{}", flake_dir_c_str),
         )
         .unwrap();
         assert_eq!(fragment, "");

@@ -228,7 +228,10 @@
   herculesCI =
     hci@{ lib, ... }:
     {
-      ciSystems = [ "x86_64-linux" ];
+      ciSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       onPush.default.outputs = {
         effects.pushDocs = lib.optionalAttrs (hci.config.repo.branch == "main") (
           withSystem "x86_64-linux" (

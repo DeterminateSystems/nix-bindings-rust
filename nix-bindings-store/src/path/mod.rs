@@ -8,7 +8,6 @@ use nix_bindings_util::{
     string_return::{callback_get_result_string, callback_get_result_string_data},
     Error, Result,
 };
-use std::os::raw::c_char;
 
 /// The size of a store path hash in bytes (20 bytes, decoded from nix32).
 pub const STORE_PATH_HASH_SIZE: usize = 20;
@@ -66,7 +65,7 @@ impl StorePath {
             check_call!(raw::store_create_from_parts(
                 &mut ctx,
                 hash_part,
-                name.as_ptr() as *const c_char,
+                name.as_ptr() as *const std::ffi::c_char,
                 name.len()
             ))?
         };

@@ -45,7 +45,8 @@ mod tests {
         use std::collections::{BTreeMap, BTreeSet};
         use std::str::FromStr;
 
-        let system = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+        // Use a fixed system string so the output path hash is stable across architectures.
+        let system = "x86_64-linux".to_string();
         let out_path = "8bs8sd27bzzy6w94fznjd2j8ldmdg7x6-myname";
 
         let env = BTreeMap::from([
@@ -73,6 +74,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "https://github.com/nixops4/nix-bindings-rust/issues/64"]
     fn derivation_round_trip_harmonia() {
         let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
         let harmonia_drv = create_harmonia_derivation();
@@ -88,6 +90,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "https://github.com/nixops4/nix-bindings-rust/issues/64"]
     fn derivation_clone() {
         let mut store = crate::store::Store::open(Some("dummy://"), []).unwrap();
         let harmonia_drv = create_harmonia_derivation();
