@@ -120,6 +120,20 @@ impl Value {
     pub(crate) unsafe fn raw_ptr(&self) -> *mut raw::Value {
         self.inner.as_ptr()
     }
+
+    /// Returns a stable id for the value this handle wraps.
+    ///
+    /// The C API allocates a new `nix_value` wrapper for each lookup, so the
+    /// wrapper address changes between lookups of the same value. The wrapped
+    /// `nix::Value *` lives in the parent bindings or list elements and forcing
+    /// a thunk updates that slot in place, so two handles with equal ids refer
+    /// to the same value for as long as both handles are alive.
+    #[must_use]
+    pub fn value_id(&self) -> usize {
+        // The first member of `struct nix_value` in nix_api_expr_internal.h is
+        // the wrapped `nix::Value *`.
+        unsafe { self.inner.as_ptr().cast::<usize>().read() }
+    }
 }
 impl Drop for Value {
     fn drop(&mut self) {
@@ -143,3 +157,28 @@ impl Clone for Value {
 }
 
 // Tested in eval_state.rs
+
+#[cfg(test)]
+mod tests {
+    use crate::eval_state::{gc_register_my_thread, EvalState};
+    use nix_bindings_store::store::Store;
+    use std::collections::HashMap;
+
+    #[test]
+    fn value_id_stable_across_lookups() {
+        let _gc = gc_register_my_thread().unwrap();
+        let store = Store::open(None, HashMap::new()).unwrap();
+        let es = EvalState::new(store, []).unwrap();
+        let v = es.eval_from_string("{ x = 1; y = 2; }", "<test>").unwrap();
+
+        let x1 = es.require_attrs_select(&v, "x").unwrap();
+        let x2 = es.require_attrs_select(&v, "x").unwrap();
+        let y = es.require_attrs_select(&v, "y").unwrap();
+        let clone = x1.clone();
+
+        assert_eq!(x1.value_id(), x2.value_id());
+        assert_eq!(x1.value_id(), clone.value_id());
+        assert_ne!(x1.value_id(), y.value_id());
+        assert_ne!(v.value_id(), x1.value_id());
+    }
+}
