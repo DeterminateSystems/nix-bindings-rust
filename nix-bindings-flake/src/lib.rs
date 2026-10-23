@@ -14,7 +14,9 @@ pub struct FlakeSettings {
     pub(crate) ptr: *mut raw::flake_settings,
 }
 
+#[cfg(feature = "detnix")]
 unsafe impl Send for FlakeSettings {}
+#[cfg(feature = "detnix")]
 unsafe impl Sync for FlakeSettings {}
 
 impl Drop for FlakeSettings {
@@ -24,7 +26,6 @@ impl Drop for FlakeSettings {
         }
     }
 }
-
 impl FlakeSettings {
     pub fn new() -> Result<Self> {
         let mut ctx = Context::new();
@@ -54,7 +55,6 @@ pub trait EvalStateBuilderExt {
         settings: &FlakeSettings,
     ) -> Result<nix_bindings_expr::eval_state::EvalStateBuilder>;
 }
-
 impl EvalStateBuilderExt for nix_bindings_expr::eval_state::EvalStateBuilder {
     /// Configures the eval state to provide flakes features such as `builtins.getFlake`.
     fn flakes(
@@ -213,7 +213,9 @@ pub struct LockedFlake {
     pub(crate) ptr: NonNull<raw::locked_flake>,
 }
 
+#[cfg(feature = "detnix")]
 unsafe impl Send for LockedFlake {}
+#[cfg(feature = "detnix")]
 unsafe impl Sync for LockedFlake {}
 
 impl Drop for LockedFlake {
@@ -223,7 +225,6 @@ impl Drop for LockedFlake {
         }
     }
 }
-
 impl LockedFlake {
     pub fn lock(
         fetch_settings: &FetchersSettings,
@@ -306,7 +307,17 @@ mod tests {
         init();
         let gc_registration = gc_register_my_thread();
         let store = Store::open(None, []).unwrap();
+
+        #[cfg(feature = "detnix")]
         let eval_state = EvalStateBuilder::new(store)
+            .unwrap()
+            .flakes(&FlakeSettings::new().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        #[cfg(not(feature = "detnix"))]
+        let mut eval_state = EvalStateBuilder::new(store)
             .unwrap()
             .flakes(&FlakeSettings::new().unwrap())
             .unwrap()

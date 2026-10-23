@@ -2,7 +2,6 @@ use crate::eval_state::{EvalState, EvalStateError};
 use crate::value::Value;
 use nix_bindings_expr_sys as raw;
 use nix_bindings_util::check_call;
-use nix_bindings_util::context::Context;
 use nix_bindings_util_sys as raw_util;
 use std::error::Error;
 use std::ffi::{c_int, c_void, CStr, CString};
@@ -72,10 +71,9 @@ impl<'a> PrimOp<'a> {
             }));
             user_data as *const PrimOpContext as *mut c_void
         };
-        let mut ctx = Context::new();
         let op = unsafe {
             check_call!(raw::alloc_primop(
-                &mut ctx,
+                &mut eval_state.context,
                 FUNCTION_ADAPTER,
                 N as c_int,
                 meta.name.as_ptr(),
@@ -102,9 +100,8 @@ impl<'a> PrimOp<'a> {
     pub fn new_value(mut self) -> Result<Value, EvalStateError> {
         self.with_state_and_ptr(|ptr, this| {
             let value = this.new_value_uninitialized()?;
-            let mut ctx = Context::new();
             unsafe {
-                check_call!(raw::init_primop(&mut ctx, value.raw_ptr(), ptr))?;
+                check_call!(raw::init_primop(&mut this.context, value.raw_ptr(), ptr))?;
             };
             Ok(value)
         })
